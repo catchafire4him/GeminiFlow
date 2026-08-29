@@ -38,6 +38,7 @@ pub fn save_settings(
     hotkey::set_call_binding(&settings.call_hotkey);
     crate::logging::set_debug(settings.debug_logging);
     crate::sound::set_enabled(settings.sounds_enabled);
+    crate::sound::set_volume(settings.sound_volume);
 
     if let Err(e) = crate::startup::set_enabled(settings.launch_at_login) {
         return Err(e.to_string());
@@ -448,6 +449,13 @@ pub fn read_log(lines: usize) -> CmdResult<String> {
     let start = all.len().saturating_sub(wanted);
     Ok(all[start..].join("
 "))
+}
+
+/// Plays the start tone so the volume can be judged while adjusting it,
+/// rather than by starting a recording to hear one.
+#[tauri::command]
+pub fn test_sound() {
+    crate::sound::play(crate::sound::Tone::Start);
 }
 
 #[tauri::command]

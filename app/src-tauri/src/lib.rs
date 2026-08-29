@@ -32,6 +32,7 @@ pub fn run() {
     let settings = Settings::load(&store);
     logging::set_debug(settings.debug_logging);
     sound::set_enabled(settings.sounds_enabled);
+    sound::set_volume(settings.sound_volume);
 
     // Keeps the Run entry pointing at wherever the app now lives; a moved or
     // reinstalled executable would otherwise silently stop starting.
@@ -75,6 +76,7 @@ pub fn run() {
             commands::orphaned_audio,
             commands::note_audio,
             commands::read_log,
+            commands::test_sound,
             commands::delete_orphaned_audio,
             commands::clear_dictations,
             commands::delete_all_notes,

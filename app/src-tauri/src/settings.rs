@@ -53,6 +53,9 @@ pub struct Settings {
     /// them there is no confirmation a hold-to-talk key registered.
     #[serde(default = "default_true")]
     pub sounds_enabled: bool,
+    /// 0-100. 50 is the level the tones were tuned at.
+    #[serde(default = "default_sound_volume")]
+    pub sound_volume: i64,
     /// Start with Windows and go straight to the tray.
     #[serde(default)]
     pub launch_at_login: bool,
@@ -86,6 +89,10 @@ fn default_note_silence() -> i64 {
     2
 }
 
+fn default_sound_volume() -> i64 {
+    50
+}
+
 fn default_call_hotkey() -> String {
     "CtrlShiftQuote".to_string()
 }
@@ -117,6 +124,7 @@ impl Default for Settings {
             prebuffer_seconds: default_prebuffer_seconds(),
             notes_model: default_notes_model(),
             sounds_enabled: true,
+            sound_volume: default_sound_volume(),
             launch_at_login: false,
             start_hidden: false,
             debug_logging: false,

@@ -8,19 +8,28 @@
 //! rising for start, lower for stop. Quiet on purpose; this fires every time
 //! you dictate and an obtrusive sound would be worse than none.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::Mutex;
 
 use windows::core::PCWSTR;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 
 const SAMPLE_RATE: u32 = 22_050;
-const AMPLITUDE: f32 = 0.055;
+
+/// Peak amplitude at volume 100. Set so the default of 50 lands on the level
+/// that was tuned by ear, leaving room to go louder without distorting.
+const MAX_AMPLITUDE: f32 = 0.11;
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
+static VOLUME: AtomicU32 = AtomicU32::new(50);
 
 pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
+}
+
+pub fn set_volume(percent: i64) {
+    VOLUME.store(percent.clamp(0, 100) as u32, Ordering::SeqCst);
 }
 
 #[derive(Clone, Copy)]
@@ -31,26 +40,37 @@ pub enum Tone {
     Stop,
 }
 
+/// Rendered tones, keyed by (tone, volume).
+///
+/// Leaked deliberately: SND_ASYNC returns immediately and Windows keeps
+/// reading the buffer while it plays, so it has to outlive this call. Each is
+/// about 4 KB and only the levels actually used are ever built.
+static CACHE: Mutex<Option<HashMap<(u8, u32), &'static [u8]>>> = Mutex::new(None);
+
 pub fn play(tone: Tone) {
     if !ENABLED.load(Ordering::SeqCst) {
         return;
     }
+    let volume = VOLUME.load(Ordering::SeqCst);
+    if volume == 0 {
+        return;
+    }
 
-    // Held in a static because SND_ASYNC returns immediately and Windows reads
-    // the buffer while it plays; a local would be freed out from under it.
-    let wav = match tone {
-        Tone::Start => {
-            static START: OnceLock<Vec<u8>> = OnceLock::new();
-            // C5 -> E5. Lower and closer together than a bright beep; the
-            // interval still reads as "up" without being piercing.
-            START.get_or_init(|| tone_wav(523.25, 659.25, 0.09))
-        }
-        Tone::Stop => {
-            static STOP: OnceLock<Vec<u8>> = OnceLock::new();
-            // C5 -> G4, resolving downward.
-            STOP.get_or_init(|| tone_wav(523.25, 392.0, 0.09))
-        }
+    let (key, from_hz, to_hz) = match tone {
+        // C5 -> E5. Lower and closer together than a bright beep; the interval
+        // still reads as "up" without being piercing.
+        Tone::Start => (0u8, 523.25, 659.25),
+        // C5 -> G4, resolving downward.
+        Tone::Stop => (1u8, 523.25, 392.0),
     };
+
+    let Ok(mut guard) = CACHE.lock() else { return };
+    let cache = guard.get_or_insert_with(HashMap::new);
+    let wav = *cache.entry((key, volume)).or_insert_with(|| {
+        let amplitude = MAX_AMPLITUDE * (volume as f32 / 100.0);
+        Box::leak(tone_wav(from_hz, to_hz, 0.09, amplitude).into_boxed_slice())
+    });
+    drop(guard);
 
     unsafe {
         let _ = PlaySoundW(
@@ -70,7 +90,7 @@ pub fn play(tone: Tone) {
 /// body with short fades. That turns it into a swell that rises and falls,
 /// which reads as much softer than the same amplitude held steady - there is
 /// no point at which it is simply "on".
-fn tone_wav(from_hz: f32, to_hz: f32, seconds: f32) -> Vec<u8> {
+fn tone_wav(from_hz: f32, to_hz: f32, seconds: f32, amplitude: f32) -> Vec<u8> {
     let total = (SAMPLE_RATE as f32 * seconds) as usize;
 
     let mut samples = Vec::with_capacity(total);
@@ -88,7 +108,7 @@ fn tone_wav(from_hz: f32, to_hz: f32, seconds: f32) -> Vec<u8> {
         // Hann window: silent at both ends, peaking in the middle.
         let envelope = 0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / total as f32).cos());
 
-        samples.push((phase.sin() * AMPLITUDE * envelope * i16::MAX as f32) as i16);
+        samples.push((phase.sin() * amplitude * envelope * i16::MAX as f32) as i16);
     }
 
     encode_wav(&samples)

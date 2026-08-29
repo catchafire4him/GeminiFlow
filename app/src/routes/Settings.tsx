@@ -37,6 +37,7 @@ export function SettingsView() {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
   const [orphans, setOrphans] = useState<OrphanInfo | null>(null);
+  const [volume, setVolume] = useState(50);
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
@@ -44,7 +45,13 @@ export function SettingsView() {
     api.hasApiKey().then(setHasKey).catch(() => {});
     api.dataStats().then(setStats).catch(() => {});
     api.orphanedAudio().then(setOrphans).catch(() => {});
+    api.getSettings().then((s) => setVolume(s.soundVolume)).catch(() => {});
   }, []);
+
+  async function commitVolume() {
+    await patch({ soundVolume: volume });
+    api.testSound().catch(() => {});
+  }
 
   async function runDestructive(
     id: string,
@@ -233,6 +240,33 @@ export function SettingsView() {
           notes and calls alike. Without it there is nothing to confirm a
           hold-to-talk key actually registered.
         </p>
+
+        {settings.soundsEnabled && (
+          <div className="row" style={{ marginTop: 12, gap: 12 }}>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={volume}
+              style={{ flex: 1, width: "auto" }}
+              aria-label="Sound volume"
+              onChange={(e) => setVolume(Number(e.target.value))}
+              // Saved and previewed on release rather than on every drag step:
+              // dragging fires continuously and would both hammer the database
+              // and stutter overlapping tones.
+              onMouseUp={commitVolume}
+              onKeyUp={commitVolume}
+              onTouchEnd={commitVolume}
+            />
+            <span className="muted" style={{ minWidth: "4ch" }}>
+              {volume}%
+            </span>
+            <button className="ghost" onClick={() => api.testSound()}>
+              Test
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="field">

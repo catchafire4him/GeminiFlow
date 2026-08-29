@@ -77,6 +77,7 @@ export interface Settings {
   prebufferEnabled: boolean;
   prebufferSeconds: number;
   soundsEnabled: boolean;
+  soundVolume: number;
   launchAtLogin: boolean;
   startHidden: boolean;
   debugLogging: boolean;
@@ -130,6 +131,7 @@ export const api = {
   orphanedAudio: () => invoke<OrphanInfo>("orphaned_audio"),
   noteAudio: (id: number) => invoke<string>("note_audio", { id }),
   readLog: (lines: number) => invoke<string>("read_log", { lines }),
+  testSound: () => invoke<void>("test_sound"),
   deleteOrphanedAudio: () => invoke<number>("delete_orphaned_audio"),
   clearDictations: () => invoke<number>("clear_dictations"),
   deleteAllNotes: () => invoke<number>("delete_all_notes"),
