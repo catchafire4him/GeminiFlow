@@ -343,7 +343,17 @@ Field lessons: the UI hotkey forwarding had to cover the call chord too (it dies
 
 **M4 — Fit and finish.** Usage/cost counter, retention sweep, error toasts, auto-start. Scope is two machines, so: portable build, no installer, no onboarding flow, no code signing — just a first-run screen to paste an API key.
 
-**M5 — Loopback (deferred).** WASAPI loopback `CaptureSource`, two-stream mixing, diarized speaker labels in the note view. Covers PC-routed calls (Teams/Zoom/Discord); cannot help with cell calls.
+**M5 — Loopback. DROPPED.** Not deferred, dropped: capturing a PC-routed
+call records the other party, and the recording-consent exposure is not worth
+the feature for personal use. Revisit only with a deliberate decision about
+consent, not as a technical follow-up.
+
+**Note that speakerphone mode has the same property.** It is already shipped,
+and with it on the microphone captures both sides and diarisation labels them.
+If the M5 reasoning holds, speakerphone deserves the same scrutiny -- it is the
+same act by a different route.
+
+**M5 — original scope (not built).** WASAPI loopback `CaptureSource`, two-stream mixing, diarized speaker labels in the note view. Covers PC-routed calls (Teams/Zoom/Discord); cannot help with cell calls.
 
 ## Scope
 
