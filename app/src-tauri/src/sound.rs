@@ -15,7 +15,7 @@ use windows::core::PCWSTR;
 use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
 
 const SAMPLE_RATE: u32 = 22_050;
-const AMPLITUDE: f32 = 0.11;
+const AMPLITUDE: f32 = 0.055;
 
 static ENABLED: AtomicBool = AtomicBool::new(true);
 
@@ -41,11 +41,14 @@ pub fn play(tone: Tone) {
     let wav = match tone {
         Tone::Start => {
             static START: OnceLock<Vec<u8>> = OnceLock::new();
-            START.get_or_init(|| tone_wav(660.0, 880.0, 0.075))
+            // C5 -> E5. Lower and closer together than a bright beep; the
+            // interval still reads as "up" without being piercing.
+            START.get_or_init(|| tone_wav(523.25, 659.25, 0.09))
         }
         Tone::Stop => {
             static STOP: OnceLock<Vec<u8>> = OnceLock::new();
-            STOP.get_or_init(|| tone_wav(660.0, 494.0, 0.075))
+            // C5 -> G4, resolving downward.
+            STOP.get_or_init(|| tone_wav(523.25, 392.0, 0.09))
         }
     };
 
@@ -61,12 +64,14 @@ pub fn play(tone: Tone) {
 /// A WAV of a tone sliding from `from_hz` to `to_hz`.
 ///
 /// The pitch slide is what makes the two cues obviously different rather than
-/// merely different in pitch. Amplitude is faded in and out over a few
-/// milliseconds because an abrupt start or end produces an audible click that
-/// sounds like a fault.
+/// merely different in pitch.
+///
+/// The envelope is a raised cosine across the whole tone rather than a flat
+/// body with short fades. That turns it into a swell that rises and falls,
+/// which reads as much softer than the same amplitude held steady - there is
+/// no point at which it is simply "on".
 fn tone_wav(from_hz: f32, to_hz: f32, seconds: f32) -> Vec<u8> {
     let total = (SAMPLE_RATE as f32 * seconds) as usize;
-    let fade = (SAMPLE_RATE as f32 * 0.008) as usize;
 
     let mut samples = Vec::with_capacity(total);
     let mut phase = 0.0f32;
@@ -80,13 +85,8 @@ fn tone_wav(from_hz: f32, to_hz: f32, seconds: f32) -> Vec<u8> {
         // discontinuities and clicks.
         phase += std::f32::consts::TAU * hz / SAMPLE_RATE as f32;
 
-        let envelope = if i < fade {
-            i as f32 / fade as f32
-        } else if i > total.saturating_sub(fade) {
-            (total - i) as f32 / fade as f32
-        } else {
-            1.0
-        };
+        // Hann window: silent at both ends, peaking in the middle.
+        let envelope = 0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / total as f32).cos());
 
         samples.push((phase.sin() * AMPLITUDE * envelope * i16::MAX as f32) as i16);
     }
