@@ -56,6 +56,17 @@ things in this codebase look wrong until you know why they are that way:
 - **The Live API replies with binary WebSocket frames**, not text frames. A
   client handling only `Message::Text` silently discards everything including
   `setupComplete`.
+- **The live session turns off the server's voice-activity detection** and
+  sends `activityStart` / `activityEnd` itself. Automatic detection ends the
+  turn on ordinary mid-sentence pauses, and every turn boundary resets the
+  interim hypothesis, so speech before it is lost. A hold-to-talk key already
+  knows exactly where the utterance starts and stops.
+- **The live client does not stop at the first final transcript.** The server
+  flushes buffered speech as several finals after the stream ends; breaking on
+  the first drops the rest.
+- **Speakerphone transcripts are verbatim, not smart.** Smart formatting and
+  diarisation are mutually exclusive in the API, and speaker labels matter more
+  in that mode than filler-word removal.
 - **The keyboard hook is not called while the app's own window has focus**, so
   the UI forwards those keystrokes to the same engine.
 - **Notes are saved before they are summarised**, and summarising runs on its

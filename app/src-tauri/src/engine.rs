@@ -999,6 +999,12 @@ fn process_dictation(
 
     let mut text = String::new();
     let live_attempted = session.live.is_some();
+    // Which path actually produced the text that gets pasted. Worth
+    // recording because the three are not equivalent: only the finals and
+    // the batch call are smart-formatted. Interim hypotheses are the raw
+    // running guess, so a transcript that arrives that way keeps the filler
+    // words smart mode would have removed.
+    let mut source = "none";
 
     if let Some(live_session) = session.live.take() {
         match live_session.finish() {
@@ -1008,6 +1014,7 @@ fn process_dictation(
                     result.finalize_ms,
                     if result.from_partial { " (from interim)" } else { "" }
                 );
+                source = if result.from_partial { "live-interim" } else { "live-final" };
                 text = result.transcript;
             }
             Err(e) => crate::logln!("[engine] live failed: {e}"),
@@ -1030,6 +1037,7 @@ fn process_dictation(
             text.trim().len()
         );
         text.clear();
+        source = "none";
     }
 
     // The audio is still in hand, so a live session that produced nothing costs
@@ -1061,6 +1069,7 @@ fn process_dictation(
             &session.settings.language,
             false,
         )?;
+        source = "batch";
         crate::logln!(
             "[engine] batch produced {} chars in {} ms",
             text.trim().len(),
@@ -1072,6 +1081,13 @@ fn process_dictation(
         set_error(app, state, "no speech was recognised in that recording");
         return Ok(());
     }
+
+    // One line per dictation summarising which path won, so a run of these
+    // answers "is live actually being used" without reading the whole log.
+    crate::logln!(
+        "[engine] dictation via {source}: {} chars for {seconds:.1}s of audio",
+        text.trim().len()
+    );
 
     set_state(app, state, State::Injecting);
     let target_app = inject::window_process_name(session.target.hwnd());

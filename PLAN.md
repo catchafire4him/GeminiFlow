@@ -371,6 +371,42 @@ Personal use — your machine, plus possibly your dad's. That removes installers
 - **Clipboard clobber.** Mitigated by save/restore with an ownership check, but it is a real behavioral cost of the approach.
 - **Live API 10-minute session cap.** Only affects the preview path; long dictations must roll the WS session or drop to batch-only.
 
+## Live reliability pass (0.2.1)
+
+Three defects found by reading our request against the API reference rather
+than by measurement. All three are ours, not the model's.
+
+1. **Automatic VAD was left on.** The default lets the server decide where a
+   turn ends, and it ends one on any sufficient pause. Each boundary resets
+   the interim hypothesis, so anything not already covered by a final was
+   lost — the reported "cuts off partway through". The docs describe manual
+   activity signalling as the configuration for push-to-talk, which is
+   precisely what a hold-to-dictate key is. Now
+   `automaticActivityDetection.disabled` with explicit `activityStart` /
+   `activityEnd`, and `turnCoverage: TURN_INCLUDES_ALL_INPUT` so pauses stay
+   inside the turn.
+2. **We stopped at the first final after the release edge.** The server
+   flushes what it has buffered as a series of finals; taking one and
+   breaking discarded the others. Replaced with a 300 ms grace window that
+   `turnComplete` normally pre-empts, so the measured finalisation latency is
+   unchanged in the common case.
+3. **Speakerphone asked for an impossible mode.** `{"type":"smart",
+   "diarization_mode":"speaker"}` — the object form of `mode` only accepts
+   `verbatim`, and smart cannot be combined with diarisation. Diarisation
+   wins for speakerphone; everything else stays smart.
+
+**On filler words.** Smart mode is documented to remove "um", "uh",
+stutters and false starts, and our batch request has always asked for it
+correctly. The likely source of filler words in shipped transcripts is the
+interim-fallback path: interims are speculative running hypotheses, not the
+cleaned final. Each dictation now logs which of the three paths produced its
+text (`live-final`, `live-interim`, `batch`), which turns that from a guess
+into something the log answers.
+
+**The log no longer truncates at startup.** It rotates at 5 MB instead. The
+app starts with Windows, so truncating destroyed the evidence for exactly
+the intermittent faults worth investigating.
+
 ## Deferred ideas
 
 - Auto-populate vocabulary by scanning the active repo for identifiers.

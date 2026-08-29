@@ -71,8 +71,17 @@ impl BatchClient {
         // Speaker labels are only worth it when more than one voice is
         // present: turning diarisation on drops the audio ceiling from 60 to
         // 30 minutes.
+        // The object form of mode only accepts type "verbatim": smart
+        // transcription cannot be combined with diarisation or word
+        // timestamps. We were sending {"type":"smart","diarization_mode":..},
+        // which is not a combination the API offers.
+        //
+        // Speaker labels are the whole point of speakerphone mode, so
+        // diarisation wins there and those transcripts keep their filler
+        // words. Everything else gets smart, which strips "um" and "uh"
+        // and false starts.
         let mode = if diarize {
-            json!({ "type": "smart", "diarization_mode": "speaker" })
+            json!({ "type": "verbatim", "diarization_mode": "speaker" })
         } else {
             json!("smart")
         };

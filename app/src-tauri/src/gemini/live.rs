@@ -21,6 +21,14 @@ const WS_HOST: &str = "wss://generativelanguage.googleapis.com/ws/\
 /// long wait here buys nothing and just makes a failure feel broken.
 const FINALIZE_TIMEOUT: Duration = Duration::from_millis(3500);
 
+/// How long to keep listening after a final arrives, in case more follow.
+///
+/// The server flushes buffered speech as several finals once the stream
+/// ends. Breaking on the first one drops the rest, which is one of the ways
+/// a transcript ends mid-sentence. turnComplete normally arrives well inside
+/// this window, so it rarely costs anything.
+const FINAL_GRACE: Duration = Duration::from_millis(300);
+
 pub enum LiveMsg {
     /// 16 kHz mono PCM16.
     Audio(Vec<i16>),
@@ -117,6 +125,20 @@ async fn session(
                 "languageCodes": [language],
                 "customVocabulary": vocabulary,
                 "mode": "SMART"
+            },
+            // Push-to-talk, which is exactly what a hold-to-dictate key is.
+            //
+            // With the default automatic voice-activity detection the
+            // server decides when a turn ends, and it fires on ordinary
+            // pauses mid-sentence. Every turn boundary resets the interim
+            // hypothesis, so speech before it is lost unless a final
+            // happened to cover it -- the observed "cuts off partway
+            // through". The key press and release are unambiguous activity
+            // boundaries, so we send them ourselves and let pauses stay
+            // inside the turn.
+            "realtimeInputConfig": {
+                "automaticActivityDetection": { "disabled": true },
+                "turnCoverage": "TURN_INCLUDES_ALL_INPUT"
             }
         }
     });
@@ -124,6 +146,8 @@ async fn session(
 
     let mut result = LiveResult::default();
     let mut end_sent: Option<Instant> = None;
+    // When the most recent final arrived, once the release edge has passed.
+    let mut last_final_at: Option<Instant> = None;
     let mut chunks_sent = 0usize;
     // The best interim hypothesis seen. If the server never sends a final,
     // this is far better than reporting failure for speech we did transcribe.
@@ -140,7 +164,13 @@ async fn session(
     let mut pending_audio: Vec<Vec<i16>> = Vec::new();
 
     loop {
-        let deadline = end_sent.map(|t| t + FINALIZE_TIMEOUT);
+        // Once a final has arrived the wait shortens to the grace window;
+        // until then the full finalisation timeout applies.
+        let deadline = match (end_sent, last_final_at) {
+            (Some(_), Some(seen)) => Some(seen + FINAL_GRACE),
+            (Some(sent), None) => Some(sent + FINALIZE_TIMEOUT),
+            _ => None,
+        };
 
         // Not `biased`: polling the socket first every iteration lets a chatty
         // server starve the audio-send branch on long dictations.
@@ -186,6 +216,16 @@ async fn session(
 
                 if !setup_done && value.get("setupComplete").is_some() {
                     setup_done = true;
+
+                    // Required now that automatic detection is off: with no
+                    // explicit start the server treats the audio as
+                    // inactivity and transcribes nothing.
+                    write
+                        .send(Message::Text(
+                            json!({ "realtimeInput": { "activityStart": {} } }).to_string(),
+                        ))
+                        .await?;
+
                     if !pending_audio.is_empty() {
                         crate::logln!(
                             "[live] setup acknowledged; flushing {} buffered chunks",
@@ -214,11 +254,13 @@ async fn session(
                 {
                     append_segment(&mut result.transcript, final_text);
 
-                    // Finals also arrive mid-utterance at natural pauses, so
-                    // only one received after the release edge ends the turn.
+                    // Deliberately no break. More finals usually follow the
+                    // release edge, and taking only the first truncates the
+                    // transcript. The turn ends on turnComplete, or on the
+                    // grace window expiring.
                     if let Some(sent) = end_sent {
                         result.finalize_ms = sent.elapsed().as_millis();
-                        break;
+                        last_final_at = Some(Instant::now());
                     }
                 }
 
@@ -275,6 +317,14 @@ async fn session(
                             );
                         }
                         end_sent = Some(Instant::now());
+                        // activityEnd closes the turn opened at setup;
+                        // audioStreamEnd then says no more audio is coming.
+                        // Both, in that order.
+                        write
+                            .send(Message::Text(
+                                json!({ "realtimeInput": { "activityEnd": {} } }).to_string(),
+                            ))
+                            .await?;
                         write
                             .send(Message::Text(
                                 json!({ "realtimeInput": { "audioStreamEnd": true } })
@@ -287,6 +337,12 @@ async fn session(
             }
 
             _ = sleep_until(deadline) => {
+                // Grace window expired after at least one final. An
+                // ordinary finish, not a failure -- the server simply did
+                // not bother with a closing turnComplete.
+                if last_final_at.is_some() {
+                    break;
+                }
                 crate::logln!(
                     "[live] no closing signal within {}s ({chunks_sent} chunks sent, \
                      {} chars finalised, {} chars interim)",
