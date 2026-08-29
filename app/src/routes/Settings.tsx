@@ -338,10 +338,16 @@ export function SettingsView() {
           <span>I use speakerphone</span>
         </label>
         <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
-          On speakerphone the microphone hears both sides, so calls are treated
-          as real two-way conversations and speaker labels are turned on. That
-          reduces the maximum call length from 60 to 30 minutes. Leave off for
-          handset or headset calls.
+          <strong>This records the other party, not just you.</strong> With it
+          off, only your own voice is captured and calls are written up on that
+          basis. With it on, the microphone picks up everyone audible in the
+          room and labels them by speaker.
+        </p>
+        <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+          Recording someone else may require their consent depending on where
+          you and they are. Turn this on when you have it, not by default. It
+          also reduces the maximum call length from 60 to 30 minutes, because
+          speaker labelling halves the audio the model will accept.
         </p>
       </div>
 
