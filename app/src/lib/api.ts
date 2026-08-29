@@ -55,6 +55,11 @@ export interface DataStats {
   noteCount: number;
 }
 
+export interface OrphanInfo {
+  count: number;
+  bytes: number;
+}
+
 export interface Settings {
   hotkey: string;
   inputDevice: string | null;
@@ -121,6 +126,8 @@ export const api = {
   dataStats: () => invoke<DataStats>("data_stats"),
   openDataFolder: () => invoke<void>("open_data_folder"),
   recoverRecordings: () => invoke<number>("recover_recordings"),
+  orphanedAudio: () => invoke<OrphanInfo>("orphaned_audio"),
+  deleteOrphanedAudio: () => invoke<number>("delete_orphaned_audio"),
   clearDictations: () => invoke<number>("clear_dictations"),
   deleteAllNotes: () => invoke<number>("delete_all_notes"),
 

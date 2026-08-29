@@ -348,6 +348,66 @@ fn timestamp_from_name(name: &str) -> Option<String> {
     ))
 }
 
+/// Audio files on disk that no note references.
+fn orphaned_files(state: &AppState) -> CmdResult<Vec<std::path::PathBuf>> {
+    let dir = crate::store::recordings_dir().map_err(fail)?;
+    let known: std::collections::HashSet<String> = state
+        .store
+        .known_audio_paths()
+        .into_iter()
+        .map(|p| p.to_lowercase())
+        .collect();
+
+    let mut orphans: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .map_err(fail)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|e| e == "wav").unwrap_or(false))
+        .filter(|p| !known.contains(&p.to_string_lossy().to_lowercase()))
+        .collect();
+    orphans.sort();
+    Ok(orphans)
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanInfo {
+    pub count: usize,
+    pub bytes: u64,
+}
+
+#[tauri::command]
+pub fn orphaned_audio(state: State<'_, Arc<AppState>>) -> CmdResult<OrphanInfo> {
+    let orphans = orphaned_files(&state)?;
+    let bytes = orphans
+        .iter()
+        .filter_map(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    Ok(OrphanInfo {
+        count: orphans.len(),
+        bytes,
+    })
+}
+
+/// Deletes orphaned audio outright.
+///
+/// The counterpart to recovery: an orphan is either a note worth rebuilding or
+/// a leftover from one you deliberately deleted, and only you know which.
+#[tauri::command]
+pub fn delete_orphaned_audio(state: State<'_, Arc<AppState>>) -> CmdResult<usize> {
+    let orphans = orphaned_files(&state)?;
+    let mut removed = 0usize;
+    for path in orphans {
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(e) => crate::logln!("[data] could not delete {}: {e}", path.display()),
+        }
+    }
+    crate::logln!("[data] deleted {removed} orphaned recordings");
+    Ok(removed)
+}
+
 #[tauri::command]
 pub fn open_data_folder() -> CmdResult<()> {
     let dir = crate::store::data_dir().map_err(fail)?;

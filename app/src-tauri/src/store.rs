@@ -569,7 +569,13 @@ impl Store {
             |row| row.get::<_, Option<String>>(0),
         ) {
             if let Some(path) = path {
-                let _ = std::fs::remove_file(path);
+                // Was silently ignored, which let deleted notes leave their
+                // audio behind and the folder grow without bound. Observed:
+                // eight orphans after deleting eight notes.
+                match std::fs::remove_file(&path) {
+                    Ok(()) => crate::logln!("[data] removed audio {path}"),
+                    Err(e) => crate::logln!("[data] could NOT remove audio {path}: {e}"),
+                }
             }
         }
 
@@ -642,7 +648,9 @@ impl Store {
         ) {
             if let Ok(rows) = stmt.query_map([], |r| r.get::<_, Option<String>>(0)) {
                 for path in rows.flatten().flatten() {
-                    let _ = std::fs::remove_file(path);
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        crate::logln!("[data] could NOT remove audio {path}: {e}");
+                    }
                 }
             }
         }

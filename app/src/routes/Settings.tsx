@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { api, type DataStats, type InputDevice, type Settings } from "../lib/api";
+import {
+  api,
+  type DataStats,
+  type InputDevice,
+  type OrphanInfo,
+  type Settings,
+} from "../lib/api";
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -30,12 +36,14 @@ export function SettingsView() {
   // is a clearer gate than a modal people dismiss by reflex.
   const [confirming, setConfirming] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
+  const [orphans, setOrphans] = useState<OrphanInfo | null>(null);
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
     api.listInputDevices().then(setDevices).catch(() => {});
     api.hasApiKey().then(setHasKey).catch(() => {});
     api.dataStats().then(setStats).catch(() => {});
+    api.orphanedAudio().then(setOrphans).catch(() => {});
   }, []);
 
   async function runDestructive(
@@ -424,29 +432,7 @@ export function SettingsView() {
           Open folder
         </button>
 
-        <button
-          className="ghost"
-          disabled={recovering}
-          onClick={async () => {
-            setRecovering(true);
-            setNote("Looking for recordings without a note…");
-            try {
-              const n = await api.recoverRecordings();
-              setNote(
-                n === 0
-                  ? "Nothing to recover — every recording already has a note."
-                  : `Recovered ${n} recording${n === 1 ? "" : "s"}. Open each and press Summarise now.`
-              );
-              setStats(await api.dataStats());
-            } catch (e) {
-              setNote(String(e));
-            } finally {
-              setRecovering(false);
-            }
-          }}
-        >
-          {recovering ? "Recovering…" : "Recover lost recordings"}
-        </button>
+
 
         <button
           className="danger"
@@ -479,12 +465,61 @@ export function SettingsView() {
         </button>
       </div>
 
-      <p className="hint">
-        <strong>Recover lost recordings</strong> rebuilds notes from audio files
-        the database no longer references — useful if notes go missing but the
-        recordings are still on disk. Each is re-transcribed and saved
-        unsummarised, keeping its original date.
-      </p>
+      {orphans && orphans.count > 0 && (
+        <div className="banner">
+          <strong>
+            {orphans.count} recording{orphans.count === 1 ? "" : "s"} (
+            {formatBytes(orphans.bytes)}) have no note.
+          </strong>{" "}
+          Either rebuild notes from them, or delete them if they are leftovers
+          from notes you already removed. Only you know which.
+          <div className="row" style={{ marginTop: 10 }}>
+            <button
+              className="ghost"
+              disabled={recovering}
+              onClick={async () => {
+                setRecovering(true);
+                setNote("Transcribing recordings…");
+                try {
+                  const n = await api.recoverRecordings();
+                  setNote(
+                    n === 0
+                      ? "Nothing could be recovered."
+                      : `Recovered ${n}. Open each and press Summarise now.`
+                  );
+                  setStats(await api.dataStats());
+                  setOrphans(await api.orphanedAudio());
+                } catch (e) {
+                  setNote(String(e));
+                } finally {
+                  setRecovering(false);
+                }
+              }}
+            >
+              {recovering ? "Recovering…" : "Rebuild notes from them"}
+            </button>
+
+            <button
+              className="danger"
+              onClick={() =>
+                runDestructive(
+                  "orphans",
+                  async () => {
+                    const n = await api.deleteOrphanedAudio();
+                    setOrphans(await api.orphanedAudio());
+                    return n;
+                  },
+                  (n) => `Deleted ${n} orphaned recording${n === 1 ? "" : "s"}.`
+                )
+              }
+            >
+              {confirming === "orphans"
+                ? "Click again to delete them"
+                : "Delete them"}
+            </button>
+          </div>
+        </div>
+      )}
 
       <p className="hint">
         Deleting is permanent — there is no undo and nothing goes to the
