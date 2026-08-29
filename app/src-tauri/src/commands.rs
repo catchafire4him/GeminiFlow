@@ -453,6 +453,35 @@ pub fn read_log(lines: usize) -> CmdResult<String> {
 
 /// Plays the start tone so the volume can be judged while adjusting it,
 /// rather than by starting a recording to hear one.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicLevel {
+    pub volume: i64,
+    pub muted: bool,
+}
+
+/// Windows input level for the configured microphone.
+#[tauri::command]
+pub fn mic_level(state: State<Arc<AppState>>) -> CmdResult<MicLevel> {
+    let device = state.settings.lock().ok().and_then(|s| s.input_device.clone());
+    Ok(MicLevel {
+        volume: crate::mic::volume(device.as_deref()).map_err(fail)?,
+        muted: crate::mic::is_muted(device.as_deref()).unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+pub fn set_mic_level(percent: i64, state: State<Arc<AppState>>) -> CmdResult<()> {
+    let device = state.settings.lock().ok().and_then(|s| s.input_device.clone());
+    crate::mic::set_volume(device.as_deref(), percent).map_err(fail)
+}
+
+#[tauri::command]
+pub fn set_mic_muted(muted: bool, state: State<Arc<AppState>>) -> CmdResult<()> {
+    let device = state.settings.lock().ok().and_then(|s| s.input_device.clone());
+    crate::mic::set_muted(device.as_deref(), muted).map_err(fail)
+}
+
 #[tauri::command]
 pub fn test_sound() {
     crate::sound::play(crate::sound::Tone::Start);

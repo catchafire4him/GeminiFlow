@@ -5,6 +5,7 @@ mod gemini;
 mod hotkey;
 mod inject;
 mod logging;
+mod mic;
 mod overlay;
 mod secrets;
 mod sound;
@@ -77,6 +78,9 @@ pub fn run() {
             commands::note_audio,
             commands::read_log,
             commands::test_sound,
+            commands::mic_level,
+            commands::set_mic_level,
+            commands::set_mic_muted,
             commands::delete_orphaned_audio,
             commands::clear_dictations,
             commands::delete_all_notes,

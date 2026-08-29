@@ -55,6 +55,11 @@ export interface DataStats {
   noteCount: number;
 }
 
+export interface MicLevel {
+  volume: number;
+  muted: boolean;
+}
+
 export interface OrphanInfo {
   count: number;
   bytes: number;
@@ -132,6 +137,9 @@ export const api = {
   noteAudio: (id: number) => invoke<string>("note_audio", { id }),
   readLog: (lines: number) => invoke<string>("read_log", { lines }),
   testSound: () => invoke<void>("test_sound"),
+  micLevel: () => invoke<MicLevel>("mic_level"),
+  setMicLevel: (percent: number) => invoke<void>("set_mic_level", { percent }),
+  setMicMuted: (muted: boolean) => invoke<void>("set_mic_muted", { muted }),
   deleteOrphanedAudio: () => invoke<number>("delete_orphaned_audio"),
   clearDictations: () => invoke<number>("clear_dictations"),
   deleteAllNotes: () => invoke<number>("delete_all_notes"),

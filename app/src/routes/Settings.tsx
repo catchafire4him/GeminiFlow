@@ -3,6 +3,7 @@ import {
   api,
   type DataStats,
   type InputDevice,
+  type MicLevel,
   type OrphanInfo,
   type Settings,
 } from "../lib/api";
@@ -38,6 +39,8 @@ export function SettingsView() {
   const [recovering, setRecovering] = useState(false);
   const [orphans, setOrphans] = useState<OrphanInfo | null>(null);
   const [volume, setVolume] = useState(50);
+  const [mic, setMic] = useState<MicLevel | null>(null);
+  const [micError, setMicError] = useState<string | null>(null);
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
@@ -46,7 +49,18 @@ export function SettingsView() {
     api.dataStats().then(setStats).catch(() => {});
     api.orphanedAudio().then(setOrphans).catch(() => {});
     api.getSettings().then((s) => setVolume(s.soundVolume)).catch(() => {});
+    refreshMic();
   }, []);
+
+  function refreshMic() {
+    api
+      .micLevel()
+      .then((m) => {
+        setMic(m);
+        setMicError(null);
+      })
+      .catch((e) => setMicError(String(e)));
+  }
 
   async function commitVolume() {
     await patch({ soundVolume: volume });
@@ -181,6 +195,62 @@ export function SettingsView() {
           ))}
         </select>
       </div>
+
+      {mic && (
+        <div className="field">
+          <label htmlFor="mic-level">Microphone input level</label>
+          <div className="row" style={{ gap: 12 }}>
+            <input
+              id="mic-level"
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={mic.volume}
+              disabled={mic.muted}
+              style={{ flex: 1, width: "auto" }}
+              onChange={(e) => setMic({ ...mic, volume: Number(e.target.value) })}
+              onMouseUp={() => api.setMicLevel(mic.volume).then(refreshMic)}
+              onKeyUp={() => api.setMicLevel(mic.volume).then(refreshMic)}
+            />
+            <span className="muted" style={{ minWidth: "4ch" }}>
+              {mic.volume}%
+            </span>
+            <button className="ghost" onClick={refreshMic}>
+              Refresh
+            </button>
+          </div>
+
+          {mic.muted && (
+            <div className="banner" data-tone="warn" style={{ marginTop: 10 }}>
+              <strong>This microphone is muted in Windows.</strong> Nothing will
+              be recorded until it is unmuted — a muted mic at full level looks
+              fine and captures silence.
+              <button
+                className="ghost"
+                style={{ marginLeft: 12, padding: "4px 10px" }}
+                onClick={() => api.setMicMuted(false).then(refreshMic)}
+              >
+                Unmute
+              </button>
+            </div>
+          )}
+
+          <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+            This is the Windows input level, the same one in Sound settings, so
+            changing it affects every application. A level set too low is the
+            usual reason a recording comes back empty. Quiet recordings are
+            boosted automatically, but raising the level here gives cleaner
+            audio than amplifying it afterwards.
+          </p>
+        </div>
+      )}
+
+      {micError && (
+        <div className="banner" data-tone="warn">
+          Could not read the microphone level: {micError}
+        </div>
+      )}
 
       <div className="field">
         <label htmlFor="paste">Paste method</label>
