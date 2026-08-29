@@ -35,6 +35,28 @@ pub fn run() {
     sound::set_enabled(settings.sounds_enabled);
     sound::set_volume(settings.sound_volume);
 
+    // The configuration every later line has to be read against. Without
+    // it a log full of batch dictations is ambiguous: it could mean live
+    // failed every time, or that live was simply switched off.
+    crate::logln!(
+        "[config] live streaming {}, language {}, paste {}, speakerphone {}, \
+         keep dictation audio {}, verbose {}",
+        if settings.use_live { "on" } else { "off" },
+        settings.language,
+        settings.paste_mode,
+        if settings.speakerphone { "on" } else { "off" },
+        if settings.keep_dictation_audio { "on" } else { "off" },
+        if settings.debug_logging { "on" } else { "off" },
+    );
+
+    // Aged-out dictation audio goes at launch rather than on a timer: the
+    // app runs for days at a stretch, but it is also started often enough
+    // that nothing lingers far past its window.
+    let pruned = store.prune_dictation_audio(settings.dictation_audio_days);
+    if pruned > 0 {
+        crate::logln!("[store] pruned {pruned} expired dictation recordings");
+    }
+
     // Keeps the Run entry pointing at wherever the app now lives; a moved or
     // reinstalled executable would otherwise silently stop starting.
     startup::refresh_if_enabled();

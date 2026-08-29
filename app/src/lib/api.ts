@@ -81,6 +81,8 @@ export interface Settings {
   speakerphone: boolean;
   prebufferEnabled: boolean;
   prebufferSeconds: number;
+  keepDictationAudio: boolean;
+  dictationAudioDays: number;
   soundsEnabled: boolean;
   soundVolume: number;
   launchAtLogin: boolean;

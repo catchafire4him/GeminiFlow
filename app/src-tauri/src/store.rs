@@ -103,6 +103,26 @@ pub fn data_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// What happened during one dictation, stored alongside the text.
+///
+/// Written for every dictation rather than only failures: a slow or wrong
+/// one is only recognisable against the shape of the normal ones.
+pub struct DictationDiagnostics {
+    pub audio_seconds: f64,
+    /// Loudest sample, 0.0-1.0. Distinguishes a quiet microphone from a
+    /// model that misheard perfectly good audio.
+    pub peak: f64,
+    /// live-final, live-interim or batch. Only the first and last are
+    /// smart-formatted, so this also explains surviving filler words.
+    pub source: String,
+    /// Milliseconds spent getting the text, however it was obtained.
+    pub transcribe_ms: i64,
+    /// Live was tried and did not produce usable text.
+    pub fell_back: bool,
+    /// Retained audio, when that setting is on.
+    pub audio_path: Option<String>,
+}
+
 impl Store {
     pub fn open() -> Result<Store> {
         let path = data_dir()?.join("geminiflow.db");
@@ -205,6 +225,18 @@ impl Store {
             // kind: takeaway | inferred | open_question. Calls need all three;
             // ordinary notes only ever write takeaways.
             "ALTER TABLE takeaways ADD COLUMN kind TEXT NOT NULL DEFAULT 'takeaway'",
+            // Per-dictation diagnostics. Added so an intermittent fault is a
+            // query over a few hundred rows rather than a read through the
+            // log. Nullable throughout: rows written before this shipped have
+            // no answer, and pretending they do with a default would be worse
+            // than admitting it.
+            "ALTER TABLE dictations ADD COLUMN audio_seconds REAL",
+            "ALTER TABLE dictations ADD COLUMN peak REAL",
+            // live-final | live-interim | batch
+            "ALTER TABLE dictations ADD COLUMN source TEXT",
+            "ALTER TABLE dictations ADD COLUMN transcribe_ms INTEGER",
+            "ALTER TABLE dictations ADD COLUMN fell_back INTEGER",
+            "ALTER TABLE dictations ADD COLUMN audio_path TEXT",
         ] {
             let _ = conn.execute(stmt, []);
         }
@@ -271,13 +303,28 @@ impl Store {
         target_app: Option<&str>,
         latency_ms: Option<i64>,
         injected_ok: bool,
+        diag: &DictationDiagnostics,
     ) -> Result<Dictation> {
         let created_at = chrono::Utc::now().to_rfc3339();
         let conn = self.conn.lock().unwrap();
         conn.execute(
-            "INSERT INTO dictations (text, target_app, injected_ok, latency_ms, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![text, target_app, injected_ok as i32, latency_ms, created_at],
+            "INSERT INTO dictations
+                 (text, target_app, injected_ok, latency_ms, created_at,
+                  audio_seconds, peak, source, transcribe_ms, fell_back, audio_path)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                text,
+                target_app,
+                injected_ok as i32,
+                latency_ms,
+                created_at,
+                diag.audio_seconds,
+                diag.peak,
+                diag.source,
+                diag.transcribe_ms,
+                diag.fell_back as i32,
+                diag.audio_path,
+            ],
         )?;
         Ok(Dictation {
             id: conn.last_insert_rowid(),
@@ -287,6 +334,49 @@ impl Store {
             injected_ok,
             created_at,
         })
+    }
+
+    /// Deletes dictation audio older than `days`, leaving the rows alone.
+    ///
+    /// The text is the valuable part and costs almost nothing to keep; the
+    /// audio is the part that grows without bound, and it is only there to
+    /// settle "did the model mishear, or did we send it something bad".
+    /// That question has a short shelf life.
+    pub fn prune_dictation_audio(&self, days: i64) -> usize {
+        let cutoff = (chrono::Utc::now() - chrono::Duration::days(days.max(1)))
+            .to_rfc3339();
+        let Ok(conn) = self.conn.lock() else { return 0 };
+
+        let Ok(mut stmt) = conn.prepare(
+            "SELECT id, audio_path FROM dictations
+             WHERE audio_path IS NOT NULL AND created_at < ?1",
+        ) else {
+            return 0;
+        };
+        let rows: Vec<(i64, String)> = stmt
+            .query_map(params![cutoff], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map(|r| r.filter_map(Result::ok).collect())
+            .unwrap_or_default();
+        drop(stmt);
+
+        let mut removed = 0usize;
+        for (id, path) in rows {
+            // Clear the column even if the file was already gone, so a
+            // missing file is not rediscovered on every launch.
+            match std::fs::remove_file(&path) {
+                Ok(()) => removed += 1,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    crate::logln!("[store] could not delete {path}: {e}");
+                    continue;
+                }
+            }
+            let _ = conn.execute(
+                "UPDATE dictations SET audio_path = NULL WHERE id = ?1",
+                params![id],
+            );
+        }
+        removed
     }
 
     pub fn list_dictations(&self, limit: i64) -> Vec<Dictation> {

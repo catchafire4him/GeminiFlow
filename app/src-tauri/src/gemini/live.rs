@@ -148,6 +148,26 @@ async fn session(
     let mut end_sent: Option<Instant> = None;
     // When the most recent final arrived, once the release edge has passed.
     let mut last_final_at: Option<Instant> = None;
+
+    // Everything below exists so one summary line per session can say what
+    // happened. Before this, a session that worked perfectly logged nothing
+    // at all, which made a good run indistinguishable from one that never
+    // ran -- and left no way to tell whether a change to the setup helped.
+    let opened = Instant::now();
+    let mut setup_ms: Option<u128> = None;
+    // Split at the release edge: finals before it are the server
+    // segmenting as you speak, finals after it are the flush. More than one
+    // in the flush is the case that used to be truncated.
+    let mut finals_before_end = 0usize;
+    let mut finals_after_end = 0usize;
+    // Should now be zero on every session. A non-zero count means the
+    // server is still segmenting turns despite automatic detection being
+    // disabled, and the truncation cause was misdiagnosed.
+    let mut early_turns = 0usize;
+    // Every break below sets this, so the initial value is currently dead --
+    // kept as a correct fallback if another exit path is ever added.
+    #[allow(unused_assignments)]
+    let mut ended = "unknown";
     let mut chunks_sent = 0usize;
     // The best interim hypothesis seen. If the server never sends a final,
     // this is far better than reporting failure for speech we did transcribe.
@@ -176,7 +196,10 @@ async fn session(
         // server starve the audio-send branch on long dictations.
         tokio::select! {
             incoming = read.next() => {
-                let Some(message) = incoming else { break };
+                let Some(message) = incoming else {
+                    ended = "socket closed";
+                    break;
+                };
                 let message = message.map_err(|e| anyhow!("stream read failed: {e}"))?;
 
                 // The Live API replies with BINARY frames containing JSON, not
@@ -216,6 +239,7 @@ async fn session(
 
                 if !setup_done && value.get("setupComplete").is_some() {
                     setup_done = true;
+                    setup_ms = Some(opened.elapsed().as_millis());
 
                     // Required now that automatic detection is off: with no
                     // explicit start the server treats the audio as
@@ -259,8 +283,11 @@ async fn session(
                     // transcript. The turn ends on turnComplete, or on the
                     // grace window expiring.
                     if let Some(sent) = end_sent {
+                        finals_after_end += 1;
                         result.finalize_ms = sent.elapsed().as_millis();
                         last_final_at = Some(Instant::now());
+                    } else {
+                        finals_before_end += 1;
                     }
                 }
 
@@ -279,8 +306,10 @@ async fn session(
                 if turn_done {
                     if let Some(sent) = end_sent {
                         result.finalize_ms = sent.elapsed().as_millis();
+                        ended = "turnComplete";
                         break;
                     }
+                    early_turns += 1;
                     // The server ended the turn on its own, before the user let
                     // go -- its silence detection fired mid-dictation. Bank the
                     // interim text now, because the next turn resets it.
@@ -332,7 +361,10 @@ async fn session(
                             ))
                             .await?;
                     }
-                    None => break,
+                    None => {
+                        ended = "audio channel closed";
+                        break;
+                    }
                 }
             }
 
@@ -341,8 +373,10 @@ async fn session(
                 // ordinary finish, not a failure -- the server simply did
                 // not bother with a closing turnComplete.
                 if last_final_at.is_some() {
+                    ended = "grace window";
                     break;
                 }
+                ended = "finalize timeout";
                 crate::logln!(
                     "[live] no closing signal within {}s ({chunks_sent} chunks sent, \
                      {} chars finalised, {} chars interim)",
@@ -384,6 +418,20 @@ async fn session(
             interim.len()
         );
     }
+
+    // One line per session, success or failure. Reading a run of these is
+    // how the questions get answered: is live being used at all, is the
+    // server still segmenting turns, does the flush ever carry more than
+    // one final, and where the time goes.
+    crate::logln!(
+        "[live] session: setup {} ms, {chunks_sent} chunks, finals {finals_before_end}+\
+         {finals_after_end}, early turns {early_turns}, ended on {ended}, \
+         finalize {} ms, {} chars{}",
+        setup_ms.map(|m| m.to_string()).unwrap_or_else(|| "never".into()),
+        result.finalize_ms,
+        result.transcript.len(),
+        if result.from_partial { " (interim)" } else { "" }
+    );
 
     if result.transcript.is_empty() {
         return Err(anyhow!(

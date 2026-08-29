@@ -56,6 +56,16 @@ pub struct Settings {
     /// 0-100. 50 is the level the tones were tuned at.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: i64,
+    /// Keep the recording behind each dictation.
+    ///
+    /// Off by default. This is the only way to tell a model that misheard
+    /// from audio that was never intelligible, but it also means every word
+    /// dictated is sitting on disk as a WAV, so it is opt-in and pruned.
+    #[serde(default)]
+    pub keep_dictation_audio: bool,
+    /// How long retained dictation audio survives.
+    #[serde(default = "default_audio_days")]
+    pub dictation_audio_days: i64,
     /// Start with Windows and go straight to the tray.
     #[serde(default)]
     pub launch_at_login: bool,
@@ -87,6 +97,10 @@ fn default_note_max() -> i64 {
 
 fn default_note_silence() -> i64 {
     2
+}
+
+fn default_audio_days() -> i64 {
+    7
 }
 
 fn default_sound_volume() -> i64 {
@@ -123,6 +137,8 @@ impl Default for Settings {
             prebuffer_enabled: false,
             prebuffer_seconds: default_prebuffer_seconds(),
             notes_model: default_notes_model(),
+            keep_dictation_audio: false,
+            dictation_audio_days: default_audio_days(),
             sounds_enabled: true,
             sound_volume: default_sound_volume(),
             launch_at_login: false,

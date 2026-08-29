@@ -407,6 +407,29 @@ into something the log answers.
 app starts with Windows, so truncating destroyed the evidence for exactly
 the intermittent faults worth investigating.
 
+## Diagnostics (0.2.1)
+
+Built so the next "it is inconsistent" report is answerable from evidence
+rather than recollection.
+
+- **One summary line per live session**: setup latency, chunks sent, finals
+  before and after the release edge, early turn count, how the turn ended,
+  finalisation time. Every previous  line fired only on a failure, so a
+  session that worked logged nothing and could not be distinguished from one
+  that never ran. Early turns should now be zero on every session; if they are
+  not, the VAD diagnosis was wrong.
+- **One line per dictation** naming the path that produced the text, plus the
+  transcript itself under verbose logging.
+- **A  line at startup.** A log full of batch dictations is ambiguous
+  without it -- live may have failed every time, or simply been switched off.
+- **Diagnostic columns on **: audio seconds, peak, source,
+  transcribe ms, whether a fallback fired, retained audio path. Finding the bad
+  ones is now a query over a few hundred rows.
+- **Optional dictation audio retention**, off by default, pruned after a
+  configurable window. The only thing that separates "the model misheard" from
+  "we sent it something unintelligible" -- and the reason it stays opt-in is
+  that it puts every dictated word on disk as a WAV.
+
 ## Deferred ideas
 
 - Auto-populate vocabulary by scanning the active repo for identifiers.

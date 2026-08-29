@@ -529,6 +529,42 @@ export function SettingsView() {
         reinstalling the app — that only replaces the program.
       </p>
 
+      <div className="field">
+        <label className="row" style={{ gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={settings.keepDictationAudio}
+            style={{ width: "auto" }}
+            onChange={(e) => patch({ keepDictationAudio: e.target.checked })}
+          />
+          <span>Keep the recording behind each dictation</span>
+        </label>
+        <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+          Off by default. When a dictation comes out wrong, this is the only
+          way to tell whether the model misheard or the microphone never
+          picked it up properly — but it does mean everything you dictate is
+          also sitting on this machine as an audio file. Notes and calls keep
+          their audio regardless.
+        </p>
+
+        {settings.keepDictationAudio && (
+          <label className="row" style={{ gap: 8, marginTop: 12 }}>
+            <span className="muted">Delete it after</span>
+            <select
+              value={settings.dictationAudioDays}
+              style={{ width: "auto" }}
+              onChange={(e) =>
+                patch({ dictationAudioDays: Number(e.target.value) })
+              }
+            >
+              <option value={3}>3 days</option>
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+            </select>
+          </label>
+        )}
+      </div>
+
       {stats && (
         <div className="field">
           <ul className="list">

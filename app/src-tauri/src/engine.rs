@@ -395,6 +395,8 @@ struct DictationJob {
     session: Session,
     samples: Vec<f32>,
     released: Instant,
+    /// Measured on the event loop, where the samples are already in hand.
+    peak: f32,
 }
 
 struct NoteJob {
@@ -805,6 +807,19 @@ fn fallback_draft(transcript: &str) -> crate::store::NoteDraft {
     }
 }
 
+/// Kept apart from note audio by name so the two are never confused, and so
+/// the pruner can only ever delete its own.
+fn save_dictation_audio(wav: &[u8]) -> Result<String> {
+    let dir = crate::store::recordings_dir()?;
+    let name = format!(
+        "dictation-{}.wav",
+        chrono::Utc::now().format("%Y%m%d-%H%M%S%.3f")
+    );
+    let path = dir.join(name);
+    std::fs::write(&path, wav)?;
+    Ok(path.to_string_lossy().to_string())
+}
+
 fn save_note_audio(wav: &[u8], kind: &str) -> Result<String> {
     let dir = crate::store::recordings_dir()?;
     // Named by kind so an orphaned file can be restored as what it actually
@@ -954,7 +969,8 @@ fn stop_dictation(
     // it must happen before audioStreamEnd.
     let samples = recorder.stop()?;
     let seconds = samples.len() as f32 / audio::TARGET_RATE as f32;
-    crate::logln!("[engine] captured {seconds:.2}s, peak {:.4}", audio::peak(&samples));
+    let peak = audio::peak(&samples);
+    crate::logln!("[engine] captured {seconds:.2}s, peak {peak:.4}");
 
     if seconds < 0.25 {
         // Previously a silent return, which looked identical to the app being
@@ -966,7 +982,7 @@ fn stop_dictation(
         );
         return Ok(None);
     }
-    if audio::peak(&samples) < 0.005 {
+    if peak < 0.005 {
         set_error(
             app,
             state,
@@ -980,6 +996,7 @@ fn stop_dictation(
         session,
         samples,
         released,
+        peak,
     }))
 }
 
@@ -995,6 +1012,7 @@ fn process_dictation(
         mut session,
         samples,
         released,
+        peak,
     } = job;
 
     let mut text = String::new();
@@ -1005,6 +1023,9 @@ fn process_dictation(
     // running guess, so a transcript that arrives that way keeps the filler
     // words smart mode would have removed.
     let mut source = "none";
+    // Time spent obtaining the text, on whichever path won. Not the same as
+    // the latency the user feels, which also covers injection.
+    let mut transcribe_ms: i64 = 0;
 
     if let Some(live_session) = session.live.take() {
         match live_session.finish() {
@@ -1015,6 +1036,7 @@ fn process_dictation(
                     if result.from_partial { " (from interim)" } else { "" }
                 );
                 source = if result.from_partial { "live-interim" } else { "live-final" };
+                transcribe_ms = result.finalize_ms as i64;
                 text = result.transcript;
             }
             Err(e) => crate::logln!("[engine] live failed: {e}"),
@@ -1070,6 +1092,7 @@ fn process_dictation(
             false,
         )?;
         source = "batch";
+        transcribe_ms = batch_started.elapsed().as_millis() as i64;
         crate::logln!(
             "[engine] batch produced {} chars in {} ms",
             text.trim().len(),
@@ -1088,6 +1111,28 @@ fn process_dictation(
         "[engine] dictation via {source}: {} chars for {seconds:.1}s of audio",
         text.trim().len()
     );
+
+    // The text itself, only under debug logging. Needed to answer questions
+    // about transcription quality -- whether filler words survived, whether
+    // a sentence ends mid-thought -- which a character count cannot. Off by
+    // default because it puts everything you dictate in a plain-text file.
+    if crate::logging::debug_enabled() {
+        crate::logln!("[engine] text: {}", text.trim());
+    }
+
+    // Written after the text is in hand, so a failed transcription cannot
+    // leave a file behind with no row pointing at it.
+    let audio_path = if session.settings.keep_dictation_audio {
+        match audio::to_wav(&samples).and_then(|wav| save_dictation_audio(&wav)) {
+            Ok(path) => Some(path),
+            Err(e) => {
+                crate::logln!("[engine] could not save dictation audio: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     set_state(app, state, State::Injecting);
     let target_app = inject::window_process_name(session.target.hwnd());
@@ -1114,6 +1159,14 @@ fn process_dictation(
         target_app.as_deref(),
         Some(latency_ms),
         injected.is_ok(),
+        &crate::store::DictationDiagnostics {
+            audio_seconds: seconds as f64,
+            peak: peak as f64,
+            source: source.to_string(),
+            transcribe_ms,
+            fell_back: live_attempted && source == "batch",
+            audio_path,
+        },
     )?;
     let _ = app.emit(DICTATION_EVENT, &record);
 
