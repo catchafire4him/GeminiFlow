@@ -71,6 +71,8 @@ pub fn run() {
             commands::open_data_folder,
             commands::recover_recordings,
             commands::orphaned_audio,
+            commands::note_audio,
+            commands::read_log,
             commands::delete_orphaned_audio,
             commands::clear_dictations,
             commands::delete_all_notes,

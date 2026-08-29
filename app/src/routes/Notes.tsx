@@ -8,6 +8,7 @@ import {
   type NoteSummary,
   type Settings,
 } from "../lib/api";
+import { AudioPlayer } from "../components/AudioPlayer";
 
 export function Notes() {
   const [list, setList] = useState<NoteSummary[]>([]);
@@ -299,6 +300,13 @@ export function Notes() {
               <h2 style={{ marginTop: 22 }}>Notable</h2>
               <pre className="notable">{selected.notable.trim()}</pre>
             </>
+          )}
+
+          {selected.audioPath && (
+            <div style={{ marginTop: 22 }}>
+              <h2>Recording</h2>
+              <AudioPlayer noteId={selected.id} />
+            </div>
           )}
 
           <details style={{ marginTop: 18 }}>

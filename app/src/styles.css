@@ -529,3 +529,24 @@ pre.notable {
   color: var(--muted);
   line-height: 1.5;
 }
+
+.log-view {
+  max-height: 60vh;
+  overflow: auto;
+  margin: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  color: #cbd5e1;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.note-audio {
+  width: 100%;
+  height: 40px;
+}

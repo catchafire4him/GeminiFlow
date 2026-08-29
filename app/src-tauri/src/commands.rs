@@ -408,6 +408,47 @@ pub fn delete_orphaned_audio(state: State<'_, Arc<AppState>>) -> CmdResult<usize
     Ok(removed)
 }
 
+/// Audio for one note, base64 for the webview to play.
+///
+/// Capped rather than streamed: an hour of audio is ~115 MB, and pushing that
+/// through IPC to build a Blob would stall the UI. Long recordings are better
+/// opened in a real player, so the cap fails with a message that says so.
+const MAX_INLINE_AUDIO: u64 = 25 * 1024 * 1024;
+
+#[tauri::command]
+pub fn note_audio(id: i64, state: State<'_, Arc<AppState>>) -> CmdResult<String> {
+    use base64::Engine;
+
+    let note = state.store.note(id).ok_or("that note no longer exists")?;
+    let path = note.audio_path.ok_or("this note has no saved audio")?;
+
+    let meta = std::fs::metadata(&path)
+        .map_err(|_| format!("the recording is missing from disk ({path})"))?;
+    if meta.len() > MAX_INLINE_AUDIO {
+        return Err(format!(
+            "this recording is {:.0} MB, too large to play in the app -- open              the recordings folder and play it there",
+            meta.len() as f64 / 1024.0 / 1024.0
+        ));
+    }
+
+    let bytes = std::fs::read(&path).map_err(|e| format!("could not read the recording: {e}"))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Tail of the log file, for the in-app diagnostics view.
+#[tauri::command]
+pub fn read_log(lines: usize) -> CmdResult<String> {
+    let path = crate::store::data_dir().map_err(fail)?.join("geminiflow.log");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|e| format!("could not read the log ({}): {e}", path.display()))?;
+
+    let wanted = lines.clamp(50, 5000);
+    let all: Vec<&str> = text.lines().collect();
+    let start = all.len().saturating_sub(wanted);
+    Ok(all[start..].join("
+"))
+}
+
 #[tauri::command]
 pub fn open_data_folder() -> CmdResult<()> {
     let dir = crate::store::data_dir().map_err(fail)?;

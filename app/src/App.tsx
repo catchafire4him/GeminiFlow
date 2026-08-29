@@ -3,16 +3,18 @@ import { Home } from "./routes/Home";
 import { Notes } from "./routes/Notes";
 import { DictationView } from "./routes/Dictation";
 import { SettingsView } from "./routes/Settings";
+import { Diagnostics } from "./routes/Diagnostics";
 import { api, onStatus, type Settings, type StatusEvent } from "./lib/api";
 import { useWindowHotkeys } from "./lib/useWindowHotkeys";
 
-type Tab = "home" | "notes" | "dictation" | "settings";
+type Tab = "home" | "notes" | "dictation" | "settings" | "diagnostics";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "home", label: "Home" },
   { id: "notes", label: "Notes" },
   { id: "dictation", label: "Dictation" },
   { id: "settings", label: "Settings" },
+  { id: "diagnostics", label: "Diagnostics" },
 ];
 
 export function App() {
@@ -85,6 +87,7 @@ export function App() {
       {tab === "notes" && <Notes />}
       {tab === "dictation" && <DictationView />}
       {tab === "settings" && <SettingsView />}
+      {tab === "diagnostics" && <Diagnostics />}
     </div>
   );
 }
