@@ -69,6 +69,7 @@ pub fn run() {
             commands::retry_note_summary,
             commands::data_stats,
             commands::open_data_folder,
+            commands::recover_recordings,
             commands::clear_dictations,
             commands::delete_all_notes,
         ])

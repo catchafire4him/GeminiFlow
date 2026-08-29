@@ -555,6 +555,9 @@ impl Store {
     }
 
     pub fn delete_note(&self, id: i64) -> Result<()> {
+        // Logged because notes disappearing with no record of why is a bad
+        // place to end up, and we have been there.
+        crate::logln!("[data] deleting note {id}");
         let conn = self.conn.lock().unwrap();
 
         // Remove the audio file too; leaving orphans behind would quietly fill
@@ -575,6 +578,39 @@ impl Store {
             params![id],
         )?;
         conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Audio files the database still knows about. Anything on disk that is
+    /// not in here is an orphan: a recording whose note no longer exists.
+    pub fn known_audio_paths(&self) -> Vec<String> {
+        let Ok(conn) = self.conn.lock() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) =
+            conn.prepare("SELECT audio_path FROM recordings WHERE audio_path IS NOT NULL")
+        else {
+            return Vec::new();
+        };
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .map(|rows| rows.filter_map(Result::ok).collect())
+            .unwrap_or_default()
+    }
+
+    /// Recovery keeps the original recording time rather than stamping
+    /// everything with the moment of the import, so restored notes sort back
+    /// into place instead of arriving as a block of "now".
+    pub fn set_note_created(&self, id: i64, created_at: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE notes SET created_at = ?2 WHERE id = ?1",
+            params![id, created_at],
+        )?;
+        conn.execute(
+            "UPDATE recordings SET created_at = ?2
+              WHERE id = (SELECT recording_id FROM notes WHERE id = ?1)",
+            params![id, created_at],
+        )?;
         Ok(())
     }
 

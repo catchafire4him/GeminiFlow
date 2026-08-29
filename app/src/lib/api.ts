@@ -120,6 +120,7 @@ export const api = {
 
   dataStats: () => invoke<DataStats>("data_stats"),
   openDataFolder: () => invoke<void>("open_data_folder"),
+  recoverRecordings: () => invoke<number>("recover_recordings"),
   clearDictations: () => invoke<number>("clear_dictations"),
   deleteAllNotes: () => invoke<number>("delete_all_notes"),
 

@@ -239,6 +239,115 @@ pub fn data_stats(state: State<'_, Arc<AppState>>) -> CmdResult<DataStats> {
     })
 }
 
+/// Rebuilds notes from audio files the database has lost track of.
+///
+/// The recording is the irreplaceable part; a note row can be rebuilt from it.
+/// Each recovered note is transcribed and saved unsummarised, so it appears
+/// immediately and can be summarised with one click.
+#[tauri::command]
+pub fn recover_recordings(state: State<'_, Arc<AppState>>) -> CmdResult<usize> {
+    let dir = crate::store::recordings_dir().map_err(fail)?;
+    let api_key = secrets::get_api_key().ok_or("no API key set")?;
+    let settings = state.settings.lock().map(|s| s.clone()).unwrap_or_default();
+
+    let known: std::collections::HashSet<String> = state
+        .store
+        .known_audio_paths()
+        .into_iter()
+        .map(|p| p.to_lowercase())
+        .collect();
+
+    let mut orphans: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+        .map_err(fail)?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().map(|e| e == "wav").unwrap_or(false))
+        .filter(|p| !known.contains(&p.to_string_lossy().to_lowercase()))
+        .collect();
+    orphans.sort();
+
+    if orphans.is_empty() {
+        return Ok(0);
+    }
+    crate::logln!("[data] recovering {} orphaned recordings", orphans.len());
+
+    let batch = crate::gemini::batch::BatchClient::new().map_err(fail)?;
+    let vocabulary = state.store.vocabulary();
+    let mut recovered = 0usize;
+
+    for path in orphans {
+        let Ok(wav) = std::fs::read(&path) else { continue };
+        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let kind = if name.starts_with("call-") { "call" } else { "note" };
+
+        let transcript = match batch.transcribe(
+            &api_key,
+            gemini::BATCH_MODEL,
+            &wav,
+            &vocabulary,
+            &settings.language,
+            false,
+        ) {
+            Ok(t) if !t.trim().is_empty() => t,
+            Ok(_) => {
+                crate::logln!("[data] {name}: no speech found, skipped");
+                continue;
+            }
+            Err(e) => {
+                crate::logln!("[data] {name}: transcription failed ({e})");
+                continue;
+            }
+        };
+
+        // Duration from file size: 16 kHz mono 16-bit, minus the 44-byte header.
+        let duration_ms = ((wav.len().saturating_sub(44)) as i64 * 1000) / (16_000 * 2);
+        let title: String = transcript.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+
+        let draft = crate::store::NoteDraft {
+            title: if title.is_empty() { "Recovered recording".into() } else { format!("{title}…") },
+            ..Default::default()
+        };
+
+        let note = state
+            .store
+            .insert_note(
+                &draft,
+                &transcript,
+                Some(&path.to_string_lossy()),
+                duration_ms,
+                true,
+                kind,
+                false,
+                0,
+            )
+            .map_err(fail)?;
+
+        if let Some(ts) = timestamp_from_name(&name) {
+            let _ = state.store.set_note_created(note.id, &ts);
+        }
+
+        crate::logln!("[data] recovered {name} as note {}", note.id);
+        recovered += 1;
+    }
+
+    Ok(recovered)
+}
+
+/// "note-20260828-195804.wav" -> RFC3339. Filenames are written in UTC.
+fn timestamp_from_name(name: &str) -> Option<String> {
+    let stem = name.strip_suffix(".wav")?;
+    let (_, rest) = stem.split_once('-')?;
+    let (date, time) = rest.split_once('-')?;
+    if date.len() != 8 || time.len() != 6 {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}T{}:{}:{}+00:00",
+        &date[0..4], &date[4..6], &date[6..8],
+        &time[0..2], &time[2..4], &time[4..6]
+    ))
+}
+
 #[tauri::command]
 pub fn open_data_folder() -> CmdResult<()> {
     let dir = crate::store::data_dir().map_err(fail)?;

@@ -29,6 +29,7 @@ export function SettingsView() {
   // native confirm() is not reliably available, and a second deliberate click
   // is a clearer gate than a modal people dismiss by reflex.
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
 
   useEffect(() => {
     api.getSettings().then(setSettings).catch(() => {});
@@ -424,6 +425,30 @@ export function SettingsView() {
         </button>
 
         <button
+          className="ghost"
+          disabled={recovering}
+          onClick={async () => {
+            setRecovering(true);
+            setNote("Looking for recordings without a note…");
+            try {
+              const n = await api.recoverRecordings();
+              setNote(
+                n === 0
+                  ? "Nothing to recover — every recording already has a note."
+                  : `Recovered ${n} recording${n === 1 ? "" : "s"}. Open each and press Summarise now.`
+              );
+              setStats(await api.dataStats());
+            } catch (e) {
+              setNote(String(e));
+            } finally {
+              setRecovering(false);
+            }
+          }}
+        >
+          {recovering ? "Recovering…" : "Recover lost recordings"}
+        </button>
+
+        <button
           className="danger"
           onClick={() =>
             runDestructive(
@@ -453,6 +478,13 @@ export function SettingsView() {
             : "Delete all notes and calls"}
         </button>
       </div>
+
+      <p className="hint">
+        <strong>Recover lost recordings</strong> rebuilds notes from audio files
+        the database no longer references — useful if notes go missing but the
+        recordings are still on disk. Each is re-transcribed and saved
+        unsummarised, keeping its original date.
+      </p>
 
       <p className="hint">
         Deleting is permanent — there is no undo and nothing goes to the

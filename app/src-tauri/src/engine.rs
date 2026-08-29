@@ -669,7 +669,7 @@ fn process_note(
 
     // Audio is kept: notes are worth replaying, and re-running an old
     // recording against an improved prompt is on the roadmap.
-    let audio_path = save_note_audio(&wav).map_err(|e| {
+    let audio_path = save_note_audio(&wav, session.kind).map_err(|e| {
         crate::logln!("[engine] could not save note audio: {e}");
         e
     });
@@ -803,9 +803,11 @@ fn fallback_draft(transcript: &str) -> crate::store::NoteDraft {
     }
 }
 
-fn save_note_audio(wav: &[u8]) -> Result<String> {
+fn save_note_audio(wav: &[u8], kind: &str) -> Result<String> {
     let dir = crate::store::recordings_dir()?;
-    let name = format!("note-{}.wav", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
+    // Named by kind so an orphaned file can be restored as what it actually
+    // was; everything used to be written as "note-" regardless.
+    let name = format!("{kind}-{}.wav", chrono::Utc::now().format("%Y%m%d-%H%M%S"));
     let path = dir.join(name);
     std::fs::write(&path, wav)?;
     Ok(path.to_string_lossy().to_string())
