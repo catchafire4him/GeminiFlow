@@ -1,0 +1,197 @@
+/* The window is transparent; only the pill paints. Nothing here may set a
+   background on html/body or the transparency is lost and a black rectangle
+   appears over the user's desktop. */
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  background: transparent !important;
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  /* Belt and braces: the window is click-through at the OS level too. */
+  user-select: none;
+  cursor: default;
+}
+
+.pill {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 56px;
+  margin: 10px;
+  padding: 12px 18px;
+  /* Rounded rectangle rather than a capsule once it holds several lines. */
+  border-radius: 22px;
+
+  background: rgba(17, 24, 39, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42);
+  backdrop-filter: blur(14px);
+
+  color: #f1f5f9;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 13px;
+
+  animation: rise 140ms ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #64748b;
+  flex: none;
+  align-self: flex-start;
+  margin-top: 5px;
+}
+
+.pill[data-state="recording"] .dot,
+.pill[data-state="arming"] .dot {
+  background: #f43f5e;
+  box-shadow: 0 0 0 0 rgba(244, 63, 94, 0.6);
+  animation: pulse 1.2s ease-out infinite;
+}
+
+.pill[data-state="finalizing"] .dot,
+.pill[data-state="injecting"] .dot {
+  background: #60a5fa;
+}
+
+.pill[data-state="idle"] .dot {
+  background: #34d399;
+}
+
+.pill[data-state="error"] {
+  background: rgba(69, 10, 10, 0.94);
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.pill[data-state="error"] .dot {
+  background: #f87171;
+}
+
+@keyframes pulse {
+  to {
+    box-shadow: 0 0 0 9px rgba(244, 63, 94, 0);
+  }
+}
+
+.body {
+  flex: 1;
+  min-width: 0;
+}
+
+.label {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Caption: up to three lines of the most recent speech. The text is already
+   trimmed to its tail in JS, so this only has to wrap and cap the height. */
+.partial {
+  color: #cbd5e1;
+  font-size: 13px;
+  line-height: 1.45;
+  margin-top: 4px;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: break-word;
+}
+
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  flex: none;
+  align-self: flex-end;
+}
+
+.meter span {
+  display: block;
+  width: 2.5px;
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(180deg, #f43f5e, #fb7185);
+  transform-origin: center;
+  transition: transform 70ms linear;
+}
+
+.spinner {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid rgba(148, 163, 184, 0.28);
+  border-top-color: #60a5fa;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill,
+  .dot,
+  .spinner,
+  .meter span {
+    animation: none;
+    transition: none;
+  }
+}
+
+/* Notes recording is amber, not red, and the pill is wider: it can run for
+   many minutes, so it must never be mistaken for a 5-second dictation. */
+.pill[data-state="noteRecording"] {
+  background: rgba(69, 39, 6, 0.94);
+  border-color: rgba(251, 191, 36, 0.45);
+}
+
+.pill[data-state="noteRecording"] .dot {
+  background: #fbbf24;
+}
+
+.pill[data-state="noteRecording"] .meter span {
+  background: linear-gradient(180deg, #f59e0b, #fbbf24);
+}
+
+.pill[data-state="noteProcessing"] .dot {
+  background: #fbbf24;
+}
+
+/* A call must never be mistaken for a note at a glance -- they record for
+   different lengths and produce different write-ups. Violet, not amber. */
+.pill[data-state="callRecording"] {
+  background: rgba(46, 16, 74, 0.94);
+  border-color: rgba(192, 132, 252, 0.5);
+}
+
+.pill[data-state="callRecording"] .dot {
+  background: #c084fc;
+  box-shadow: 0 0 0 0 rgba(192, 132, 252, 0.6);
+  animation: pulse 1.2s ease-out infinite;
+}
+
+.pill[data-state="callRecording"] .meter span {
+  background: linear-gradient(180deg, #a855f7, #d8b4fe);
+}

@@ -1,0 +1,23 @@
+# Rust
+target/
+**/target/
+
+# Spike artifacts
+m0-spike/*.wav
+m0-spike/m0-*.wav
+
+# Secrets — the API key belongs in an env var or Credential Manager, never a file
+.env
+*.key
+
+# Node / Tauri (M1 onward)
+node_modules/
+dist/
+.vite/
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Tauri generated
+app/src-tauri/gen/
