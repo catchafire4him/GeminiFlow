@@ -7,6 +7,7 @@ mod inject;
 mod logging;
 mod overlay;
 mod secrets;
+mod sound;
 mod settings;
 mod startup;
 mod store;
@@ -30,6 +31,7 @@ pub fn run() {
 
     let settings = Settings::load(&store);
     logging::set_debug(settings.debug_logging);
+    sound::set_enabled(settings.sounds_enabled);
 
     // Keeps the Run entry pointing at wherever the app now lives; a moved or
     // reinstalled executable would otherwise silently stop starting.

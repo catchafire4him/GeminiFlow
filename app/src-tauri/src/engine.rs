@@ -514,6 +514,7 @@ fn begin_note(
         })
     };
 
+    crate::sound::play(crate::sound::Tone::Start);
     recorder.start(settings.input_device.clone(), Some(tap));
     set_state(
         app,
@@ -608,6 +609,7 @@ fn stop_note(
     session: NoteSession,
 ) -> Result<Option<NoteJob>> {
     session.active.store(false, Ordering::SeqCst);
+    crate::sound::play(crate::sound::Tone::Stop);
     publish_background(
         app,
         state,
@@ -922,6 +924,7 @@ fn begin(
         }
     });
 
+    crate::sound::play(crate::sound::Tone::Start);
     recorder.start(settings.input_device.clone(), Some(tap));
     set_state(app, state, State::Recording);
 
@@ -944,6 +947,7 @@ fn stop_dictation(
     session: Session,
 ) -> Result<Option<DictationJob>> {
     let released = Instant::now();
+    crate::sound::play(crate::sound::Tone::Stop);
     set_state(app, state, State::Finalizing);
 
     // Stopping the recorder flushes the tail of the utterance to the tap, so

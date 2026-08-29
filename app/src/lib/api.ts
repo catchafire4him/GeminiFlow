@@ -76,6 +76,7 @@ export interface Settings {
   speakerphone: boolean;
   prebufferEnabled: boolean;
   prebufferSeconds: number;
+  soundsEnabled: boolean;
   launchAtLogin: boolean;
   startHidden: boolean;
   debugLogging: boolean;

@@ -222,6 +222,23 @@ export function SettingsView() {
         <label className="row" style={{ gap: 8 }}>
           <input
             type="checkbox"
+            checked={settings.soundsEnabled}
+            style={{ width: "auto" }}
+            onChange={(e) => patch({ soundsEnabled: e.target.checked })}
+          />
+          <span>Play a sound when recording starts and stops</span>
+        </label>
+        <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+          A short rising tone on start and a lower one on stop, for dictation,
+          notes and calls alike. Without it there is nothing to confirm a
+          hold-to-talk key actually registered.
+        </p>
+      </div>
+
+      <div className="field">
+        <label className="row" style={{ gap: 8 }}>
+          <input
+            type="checkbox"
             checked={settings.trailingSpace}
             style={{ width: "auto" }}
             onChange={(e) => patch({ trailingSpace: e.target.checked })}

@@ -49,6 +49,10 @@ pub struct Settings {
     pub prebuffer_enabled: bool,
     #[serde(default = "default_prebuffer_seconds")]
     pub prebuffer_seconds: i64,
+    /// Short tones when a recording starts and stops. On by default: without
+    /// them there is no confirmation a hold-to-talk key registered.
+    #[serde(default = "default_true")]
+    pub sounds_enabled: bool,
     /// Start with Windows and go straight to the tray.
     #[serde(default)]
     pub launch_at_login: bool,
@@ -112,6 +116,7 @@ impl Default for Settings {
             prebuffer_enabled: false,
             prebuffer_seconds: default_prebuffer_seconds(),
             notes_model: default_notes_model(),
+            sounds_enabled: true,
             launch_at_login: false,
             start_hidden: false,
             debug_logging: false,

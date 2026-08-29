@@ -37,6 +37,7 @@ pub fn save_settings(
     hotkey::set_notes_binding(&settings.notes_hotkey);
     hotkey::set_call_binding(&settings.call_hotkey);
     crate::logging::set_debug(settings.debug_logging);
+    crate::sound::set_enabled(settings.sounds_enabled);
 
     if let Err(e) = crate::startup::set_enabled(settings.launch_at_login) {
         return Err(e.to_string());
