@@ -124,32 +124,76 @@ function followState(onState) {
 
 // ------------------------------------------------------------- button face
 
+// A page with a folded corner. Shared by every resting state so the button
+// stays recognisably the same object while its colour changes.
+const PAGE =
+  '<path d="M56 28h24l14 14v44a4 4 0 0 1-4 4H56a4 4 0 0 1-4-4V32a4 4 0 0 1 4-4z"' +
+  ' fill="none" stroke="CLR" stroke-width="4" stroke-linejoin="round"/>' +
+  '<path d="M80 28v14h14" fill="none" stroke="CLR" stroke-width="4"' +
+  ' stroke-linejoin="round"/>' +
+  '<path d="M62 58h20M62 68h20M62 78h12" stroke="CLR" stroke-width="4"' +
+  ' stroke-linecap="round"/>';
+
+const page = (colour) => PAGE.replaceAll("CLR", colour);
+
+/// A filled record dot with a ring pulsing outward from it.
+///
+/// The pulse is written into the drawing itself rather than pushed frame by
+/// frame. If Stream Deck plays it, animation costs nothing from here on; if it
+/// renders one still frame, the button simply looks solid and we know to
+/// animate the slower way.
+const pulse = (colour) =>
+  `<circle cx="72" cy="58" r="18" fill="${colour}"/>` +
+  `<circle cx="72" cy="58" r="18" fill="none" stroke="${colour}" stroke-width="3">` +
+  '<animate attributeName="r" values="18;32;18" dur="1.6s" repeatCount="indefinite"/>' +
+  '<animate attributeName="opacity" values="0.9;0;0.9" dur="1.6s" repeatCount="indefinite"/>' +
+  "</circle>";
+
+/// Three dots brightening in turn.
+const working = (colour) =>
+  [0, 1, 2]
+    .map(
+      (i) =>
+        `<circle cx="${56 + i * 16}" cy="58" r="6" fill="${colour}" opacity="0.25">` +
+        `<animate attributeName="opacity" values="0.25;1;0.25" dur="1.2s"` +
+        ` begin="${i * 0.2}s" repeatCount="indefinite"/></circle>`
+    )
+    .join("");
+
 const LOOKS = {
-  offline: { fill: "#2b2b2b", ring: "#4a4a4a", label: "offline", text: "#7a7a7a" },
-  idle: { fill: "#22262b", ring: "#4d5560", label: "Note", text: "#c8ced6" },
-  arming: { fill: "#3a3320", ring: "#c9a227", label: "…", text: "#e8d48a" },
-  recording: { fill: "#3d1f1f", ring: "#e5484d", label: "REC", text: "#ff9ea1" },
-  noteRecording: { fill: "#3d1f1f", ring: "#e5484d", label: "REC", text: "#ff9ea1" },
-  callRecording: { fill: "#3a2440", ring: "#c04ae0", label: "CALL", text: "#e6a8f5" },
-  finalizing: { fill: "#33291a", ring: "#f0a500", label: "…", text: "#ffd479" },
-  noteProcessing: { fill: "#33291a", ring: "#f0a500", label: "…", text: "#ffd479" },
-  injecting: { fill: "#1f3324", ring: "#30a46c", label: "…", text: "#8fe3b4" },
-  error: { fill: "#3d1f1f", ring: "#e5484d", label: "!", text: "#ff9ea1" },
+  offline: { bg: "#1b1d20", art: () => page("#4a4f56"), label: "offline", text: "#5f666e" },
+  idle: { bg: "#22262b", art: () => page("#c8ced6"), label: "Note", text: "#c8ced6" },
+  arming: { bg: "#33291a", art: () => working("#f0a500"), label: "…", text: "#ffd479" },
+  recording: { bg: "#3d1f1f", art: () => pulse("#e5484d"), label: "REC", text: "#ff9ea1" },
+  noteRecording: { bg: "#3d1f1f", art: () => pulse("#e5484d"), label: "REC", text: "#ff9ea1" },
+  callRecording: { bg: "#33224a", art: () => pulse("#a06ef5"), label: "CALL", text: "#c9aefc" },
+  finalizing: { bg: "#33291a", art: () => working("#f0a500"), label: "…", text: "#ffd479" },
+  noteProcessing: { bg: "#33291a", art: () => working("#f0a500"), label: "…", text: "#ffd479" },
+  injecting: { bg: "#1f3324", art: () => working("#30a46c"), label: "…", text: "#8fe3b4" },
+  error: {
+    bg: "#3d1f1f",
+    art: () =>
+      '<circle cx="72" cy="58" r="24" fill="none" stroke="#e5484d" stroke-width="5"/>' +
+      '<path d="M72 46v16" stroke="#e5484d" stroke-width="6" stroke-linecap="round"/>' +
+      '<circle cx="72" cy="71" r="3.5" fill="#e5484d"/>',
+    label: "failed",
+    text: "#ff9ea1",
+  },
 };
 
-/// The button image, as an SVG.
+/// The button image, as a drawing rather than a bitmap.
 ///
-/// SVG rather than a rendered bitmap because there is nothing here a drawing
-/// library would do better, and a string can be built without one.
+/// There is nothing here a drawing library would do better, and a string can
+/// be built without one.
 function face(state) {
   const look = LOOKS[state] || LOOKS.idle;
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144">` +
-    `<rect width="144" height="144" rx="18" fill="${look.fill}"/>` +
-    `<circle cx="72" cy="60" r="26" fill="none" stroke="${look.ring}" stroke-width="7"/>` +
-    `<text x="72" y="118" font-family="Segoe UI, sans-serif" font-size="22"` +
+    '<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">' +
+    `<rect width="144" height="144" rx="18" fill="${look.bg}"/>` +
+    look.art() +
+    `<text x="72" y="122" font-family="Segoe UI, sans-serif" font-size="20"` +
     ` fill="${look.text}" text-anchor="middle">${look.label}</text>` +
-    `</svg>`
+    "</svg>"
   );
 }
 

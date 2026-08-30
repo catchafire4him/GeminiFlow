@@ -62,6 +62,19 @@ there:
 The two most likely causes are external control being off in GeminiFlow, and
 `node_modules` not having been copied across.
 
+## About the animation
+
+Two of the states -- recording and working -- have their movement written into
+the drawing itself rather than pushed to the button frame by frame. Stream Deck
+will not accept an animated image file through the API, so this is the cheap
+route if it works at all.
+
+Look at the button while a note is recording. A ring should pulse outward from
+the red dot, and three dots should take turns brightening while it transcribes.
+If they sit still instead, Stream Deck is drawing a single frame and animation
+has to be done the expensive way, by sending a new picture ten times a second.
+Either answer is useful; nothing else needs to change to find out.
+
 ## Status
 
 The half that talks to GeminiFlow is tested and working. The half that talks
