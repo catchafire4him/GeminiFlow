@@ -4,18 +4,21 @@
 //! only, and hold-to-talk needs both edges. The hook also swallows the key so
 //! it never reaches the focused app.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::OnceLock;
 
 use anyhow::{anyhow, Result};
 use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetMessageW, SetWindowsHookExW, TranslateMessage,
-    HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP,
+    CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
+    TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
+    WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -120,6 +123,21 @@ pub static DICT_KEY_INJECTED: AtomicU32 = AtomicU32::new(0);
 pub static NOTES_KEY_SEEN: AtomicU32 = AtomicU32::new(0);
 pub static CALL_KEY_SEEN: AtomicU32 = AtomicU32::new(0);
 
+/// The live hook, so the watchdog can replace it.
+static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
+
+/// The thread owning the message pump. A WH_KEYBOARD_LL hook belongs to
+/// the thread that installed it, so reinstalling has to happen there rather
+/// than on the watchdog thread.
+static PUMP_TID: AtomicU32 = AtomicU32::new(0);
+
+/// How many times the hook has been rebuilt this run. Non-zero means the
+/// shortcuts died at least once and recovered.
+pub static REINSTALLS: AtomicU32 = AtomicU32::new(0);
+
+/// Asks the pump thread to rebuild the hook.
+const WM_REINSTALL_HOOK: u32 = WM_APP + 1;
+
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     HOOK_CALLS.fetch_add(1, Ordering::Relaxed);
 
@@ -222,6 +240,50 @@ fn emit(event: Event) {
     }
 }
 
+unsafe fn install_hook() -> Result<HHOOK> {
+    let module = GetModuleHandleW(None)?;
+    let hook: HHOOK = SetWindowsHookExW(
+        WH_KEYBOARD_LL,
+        Some(keyboard_proc),
+        HINSTANCE(module.0),
+        0,
+    )?;
+    if hook.is_invalid() {
+        return Err(anyhow!("SetWindowsHookExW returned an invalid handle"));
+    }
+    Ok(hook)
+}
+
+/// Rebuilds the hook. Must run on the pump thread.
+unsafe fn reinstall_hook() {
+    let old = HOOK_HANDLE.swap(0, Ordering::SeqCst);
+    if old != 0 {
+        // Expected to fail in the case being recovered from: Windows has
+        // already removed the hook, it just never said so.
+        let _ = UnhookWindowsHookEx(HHOOK(old as *mut core::ffi::c_void));
+    }
+    match install_hook() {
+        Ok(hook) => {
+            HOOK_HANDLE.store(hook.0 as isize, Ordering::SeqCst);
+            let n = REINSTALLS.fetch_add(1, Ordering::SeqCst) + 1;
+            crate::logln!("[hotkey] hook reinstalled (rebuild #{n} this run)");
+        }
+        Err(e) => crate::logln!("[hotkey] WARNING could not reinstall the hook: {e}"),
+    }
+}
+
+/// Tick of the last user input of any kind, mouse included.
+fn last_input_tick() -> u32 {
+    let mut info = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    unsafe {
+        let _ = GetLastInputInfo(&mut info);
+    }
+    info.dwTime
+}
+
 /// Installs the hook and pumps messages. Never returns under normal operation:
 /// a WH_KEYBOARD_LL hook only delivers callbacks on a thread with a message
 /// pump, so this must own a thread of its own.
@@ -231,16 +293,9 @@ pub fn install_and_pump(tx: Sender<Event>) -> Result<()> {
         .map_err(|_| anyhow!("keyboard hook already installed"))?;
 
     unsafe {
-        let module = GetModuleHandleW(None)?;
-        let hook: HHOOK = SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(keyboard_proc),
-            HINSTANCE(module.0),
-            0,
-        )?;
-        if hook.is_invalid() {
-            return Err(anyhow!("SetWindowsHookExW returned an invalid handle"));
-        }
+        PUMP_TID.store(GetCurrentThreadId(), Ordering::SeqCst);
+        let hook = install_hook()?;
+        HOOK_HANDLE.store(hook.0 as isize, Ordering::SeqCst);
 
         let notes_vk = NOTES_VK.load(Ordering::SeqCst);
         let call_vk = CALL_VK.load(Ordering::SeqCst);
@@ -263,9 +318,49 @@ pub fn install_and_pump(tx: Sender<Event>) -> Result<()> {
         // its own thread so the pump is never delayed.
         std::thread::spawn(|| {
             let mut last = 0u32;
+            let mut last_calls = 0u32;
+            let mut last_input = last_input_tick();
+            let mut silent_rounds = 0u32;
             loop {
                 std::thread::sleep(std::time::Duration::from_secs(5));
                 let calls = HOOK_CALLS.load(Ordering::Relaxed);
+
+                // Windows silently removes a low-level hook whose callback
+                // overruns LowLevelHooksTimeout -- 300 ms by default. There
+                // is no notification and no API that reports it: the handle
+                // stays valid and the callback simply stops being invoked.
+                // That is exactly what "the shortcuts stopped working after
+                // a while" looks like, and nothing here used to recover it.
+                //
+                // GetLastInputInfo counts mouse movement too, so one quiet
+                // round can just mean the user is reading. Three rounds --
+                // fifteen seconds of input without a single keyboard
+                // callback -- is the threshold. A needless reinstall costs
+                // microseconds, so this deliberately errs toward acting.
+                let input = last_input_tick();
+                if input != last_input && calls == last_calls {
+                    silent_rounds += 1;
+                    if silent_rounds >= 3 {
+                        crate::logln!(
+                            "[hotkey] WARNING no hook callbacks during {}s of user \
+                             input -- assuming Windows dropped the hook",
+                            silent_rounds * 5
+                        );
+                        // Already inside the enclosing unsafe block.
+                        let _ = PostThreadMessageW(
+                            PUMP_TID.load(Ordering::SeqCst),
+                            WM_REINSTALL_HOOK,
+                            WPARAM(0),
+                            LPARAM(0),
+                        );
+                        silent_rounds = 0;
+                    }
+                } else {
+                    silent_rounds = 0;
+                }
+                last_input = input;
+                last_calls = calls;
+
                 if calls != last && crate::logging::debug_enabled() {
                     crate::logln!(
                         "[hotkey] {calls} callbacks (+{}), dictation key seen {} \
@@ -284,6 +379,13 @@ pub fn install_and_pump(tx: Sender<Event>) -> Result<()> {
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            // Posted by the watchdog. Handled here because the hook belongs
+            // to this thread; a thread message has no window to dispatch to
+            // anyway.
+            if msg.message == WM_REINSTALL_HOOK {
+                reinstall_hook();
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
@@ -299,6 +401,28 @@ pub fn install_and_pump(tx: Sender<Event>) -> Result<()> {
 /// would take, so auto-stop and manual stop cannot diverge.
 pub fn request_notes_stop() {
     emit(Event::NotesToggle);
+}
+
+/// The three shortcuts, triggerable without a keyboard.
+///
+/// These feed the same event channel the hook does, so a dictation started
+/// from a Stream Deck and one started from Right Ctrl are the same session as
+/// far as everything downstream is concerned -- there is no second code path
+/// to keep in step.
+pub fn request_press() {
+    emit(Event::Press);
+}
+
+pub fn request_release() {
+    emit(Event::Release);
+}
+
+pub fn request_notes_toggle() {
+    emit(Event::NotesToggle);
+}
+
+pub fn request_call_toggle() {
+    emit(Event::CallToggle);
 }
 
 /// Feeds an event in from the UI.

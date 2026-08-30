@@ -56,6 +56,17 @@ pub struct Settings {
     /// 0-100. 50 is the level the tones were tuned at.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: i64,
+    /// Expose a local HTTP endpoint so external hardware can drive the app.
+    ///
+    /// Off by default. It opens a listening socket -- loopback only and
+    /// token authenticated, but this app's posture for anything that opens
+    /// a surface is that you turn it on deliberately.
+    #[serde(default)]
+    pub control_enabled: bool,
+    /// Preferred port. If it is taken, the OS picks one and the real port
+    /// is written to control.json.
+    #[serde(default = "default_control_port")]
+    pub control_port: i64,
     /// Keep the recording behind each dictation.
     ///
     /// Off by default. This is the only way to tell a model that misheard
@@ -99,6 +110,10 @@ fn default_note_silence() -> i64 {
     2
 }
 
+fn default_control_port() -> i64 {
+    8787
+}
+
 fn default_audio_days() -> i64 {
     7
 }
@@ -137,6 +152,8 @@ impl Default for Settings {
             prebuffer_enabled: false,
             prebuffer_seconds: default_prebuffer_seconds(),
             notes_model: default_notes_model(),
+            control_enabled: false,
+            control_port: default_control_port(),
             keep_dictation_audio: false,
             dictation_audio_days: default_audio_days(),
             sounds_enabled: true,

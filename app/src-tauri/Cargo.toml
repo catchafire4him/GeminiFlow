@@ -1,6 +1,6 @@
 [package]
 name = "geminiflow"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.77"
 
@@ -23,6 +23,7 @@ keyring = { version = "3", features = ["windows-native"] }
 chrono = "0.4"
 winreg = "0.52"
 dirs = "5"
+getrandom = "0.2"
 
 # Audio
 cpal = "0.15"

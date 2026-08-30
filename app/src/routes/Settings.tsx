@@ -684,6 +684,48 @@ export function SettingsView() {
         Manager and is not affected; remove it with the button at the top.
       </p>
 
+      <h2 style={{ marginTop: 26 }}>External control</h2>
+
+      <div className="field">
+        <label className="row" style={{ gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={settings.controlEnabled}
+            style={{ width: "auto" }}
+            onChange={(e) => patch({ controlEnabled: e.target.checked })}
+          />
+          <span>Allow local apps to control GeminiFlow</span>
+        </label>
+        <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+          Opens a small endpoint on this machine so hardware like a Stream
+          Deck can start dictation, notes and calls, and show what the app is
+          doing on its buttons. It listens on 127.0.0.1 only — nothing off
+          this machine can reach it — and requires a token that is generated
+          for you and written to <code>control.json</code> in the data folder,
+          alongside the port. Off unless you want it.
+        </p>
+        <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+          Takes effect when the app restarts.
+        </p>
+
+        {settings.controlEnabled && (
+          <label className="row" style={{ gap: 8, marginTop: 12 }}>
+            <span className="muted">Preferred port</span>
+            <input
+              type="number"
+              min={1024}
+              max={65535}
+              value={settings.controlPort}
+              style={{ width: "10ch" }}
+              onChange={(e) => patch({ controlPort: Number(e.target.value) })}
+            />
+            <span className="muted">
+              another one is chosen automatically if this is taken
+            </span>
+          </label>
+        )}
+      </div>
+
       <h2 style={{ marginTop: 26 }}>Startup</h2>
 
       <div className="field">

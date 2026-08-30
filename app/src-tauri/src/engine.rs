@@ -91,6 +91,12 @@ fn publish(app: &AppHandle, state: &AppState, status: Status) {
         _ => overlay::show(app),
     }
 
+    // Anything subscribed to the control surface sees the same state the
+    // UI does, from the same place, so the two cannot drift.
+    if let Ok(payload) = serde_json::to_string(&status) {
+        crate::control::broadcast(&payload);
+    }
+
     let _ = app.emit(STATUS_EVENT, status);
 }
 

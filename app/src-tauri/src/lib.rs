@@ -7,6 +7,7 @@ mod inject;
 mod logging;
 mod mic;
 mod overlay;
+mod control;
 mod secrets;
 mod sound;
 mod settings;
@@ -127,6 +128,19 @@ pub fn run() {
             // the engine needs a thread that is free to block on the network.
             let (tx, rx) = channel::<hotkey::Event>();
             engine::spawn(app.handle().clone(), Arc::clone(&state), rx);
+
+            // After the engine, so a client connecting immediately finds a
+            // state to read rather than a half-built one.
+            if state.settings.lock().map(|s| s.control_enabled).unwrap_or(false) {
+                let port = state
+                    .settings
+                    .lock()
+                    .map(|s| s.control_port)
+                    .unwrap_or(8787) as u16;
+                if let Err(e) = control::start(Arc::clone(&state), port) {
+                    crate::logln!("[control] could not start: {e:#}");
+                }
+            }
 
             std::thread::spawn(move || {
                 if let Err(e) = hotkey::install_and_pump(tx) {
