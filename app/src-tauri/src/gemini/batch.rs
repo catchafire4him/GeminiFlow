@@ -40,11 +40,38 @@ impl BatchClient {
 ///
 /// Do NOT set http1_only(): this endpoint requires HTTP/2 and every request
 /// fails outright with a transport error.
-    fn client() -> reqwest::Result<reqwest::blocking::Client> {
+    /// How long one attempt may take, given how much audio it carries.
+    ///
+    /// This used to be a flat sixty seconds, far longer than any healthy
+    /// request, which made a stall enormously expensive: a note that
+    /// transcribes in two seconds cost ninety-four when the first attempt
+    /// hung, because a full minute went by before anything was retried.
+    /// Giving up sooner and starting again is strictly better when the fast
+    /// case is this fast.
+    ///
+    /// It still has to scale: an hour-long note is a genuinely large upload
+    /// and deserves longer than a ten-second dictation.
+    fn attempt_timeout(wav_bytes: usize) -> Duration {
+        let megabytes = wav_bytes as u64 / (1024 * 1024);
+        Duration::from_secs((20 + megabytes * 10).min(180))
+    }
+
+    fn client(wav_bytes: usize) -> reqwest::Result<reqwest::blocking::Client> {
         reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(60))
+                .timeout(Self::attempt_timeout(wav_bytes))
                 .connect_timeout(Duration::from_secs(10))
                 // No connection reuse.
+                //
+                // Correction, 29 August: the comment below claimed Google
+                // serves this over HTTP/2 and that a shared connection was
+                // the cause. Measured with the same library and settings,
+                // every response comes back HTTP/1.1 -- reqwest is built
+                // here without its http2 feature, so it was never
+                // negotiating HTTP/2 at all. The reasoning was wrong. The
+                // setting is kept because fresh connections measure at
+                // about 75 ms and nothing depends on reuse, but it is not
+                // the fix it was described as, and the stalls it was meant
+                // to cure still happen.
                 //
                 // Measured: dictations started within a few seconds of the
                 // previous one took 20-26s instead of 2-4s, while ones after a
@@ -65,8 +92,9 @@ impl BatchClient {
     fn send_once(
         api_key: &str,
         body: &Value,
+        wav_bytes: usize,
     ) -> Result<reqwest::blocking::Response, reqwest::Error> {
-        Self::client()?
+        Self::client(wav_bytes)?
             .post(ENDPOINT)
             .header("x-goog-api-key", api_key)
             .json(body)
@@ -124,16 +152,39 @@ impl BatchClient {
         // costs a moment rather than the whole dictation. HTTP error statuses
         // are NOT retried -- those the server did answer, and repeating them
         // just bills twice.
-        let response = match Self::send_once(api_key, &body) {
-            Ok(response) => response,
-            Err(first) => {
-                crate::logln!("[batch] request failed ({first}); retrying once");
-                std::thread::sleep(Duration::from_millis(400));
-                Self::send_once(api_key, &body).map_err(|second| {
-                    anyhow!("could not reach the transcription service: {second}")
-                })?
+        // Three attempts rather than two, each with its own client and its
+        // own connection. Safe to repeat because a request that never
+        // returned was never processed; an HTTP error status is a different
+        // matter and is not retried here, since the server did answer and
+        // asking again just bills twice.
+        let mut response = None;
+        let mut last = String::new();
+
+        for attempt in 1..=3 {
+            let started = std::time::Instant::now();
+            match Self::send_once(api_key, &body, wav.len()) {
+                Ok(r) => {
+                    crate::logln!(
+                        "[batch] attempt {attempt} answered in {} ms",
+                        started.elapsed().as_millis()
+                    );
+                    response = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    last = e.to_string();
+                    crate::logln!(
+                        "[batch] attempt {attempt} gave up after {} ms ({last})",
+                        started.elapsed().as_millis()
+                    );
+                    std::thread::sleep(Duration::from_millis(400));
+                }
             }
-        };
+        }
+
+        let response = response.ok_or_else(|| {
+            anyhow!("could not reach the transcription service: {last}")
+        })?;
 
         let status = response.status();
         let text = response.text()?;
