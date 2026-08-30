@@ -393,12 +393,22 @@ function stripSegment(offset, span, state, phase, seconds) {
 // leftmost segment takes the microphone, the next takes the speakers, any
 // beyond that are display only.
 const ROLES = [
-  { id: "mic", label: "Microphone", route: (v) => `/mic/volume/${v}` },
-  { id: "output", label: "Volume", route: (v) => `/output/volume/${v}` },
+  {
+    id: "mic",
+    label: "Microphone",
+    route: (v) => `/mic/volume/${v}`,
+    mute: (on) => `/mic/mute/${on}`,
+  },
+  {
+    id: "output",
+    label: "Volume",
+    route: (v) => `/output/volume/${v}`,
+    mute: (on) => `/output/mute/${on}`,
+  },
 ];
 
 /// A quarter at rest, showing whatever its own dial controls.
-function idleSegment(role, value) {
+function idleSegment(role, value, muted) {
   const look = PALETTE.idle;
   if (!role) {
     return (
@@ -410,19 +420,27 @@ function idleSegment(role, value) {
   }
 
   const known = value >= 0;
+
+  // Muted is a state, not a level. The bar stays -- how loud it would be if
+  // unmuted is still worth seeing -- but it goes red and dim, and the
+  // reading says so in words rather than showing a percentage that is not
+  // currently true.
+  const ink = muted ? "#e5484d" : look.ink;
   const bar = known
     ? '<rect x="18" y="62" width="164" height="7" rx="3.5" fill="#ffffff" opacity="0.12"/>' +
       `<rect x="18" y="62" width="${((164 * value) / 100).toFixed(1)}" height="7" rx="3.5"` +
-      ` fill="${look.ink}" opacity="0.85"/>`
+      ` fill="${ink}" opacity="${muted ? 0.35 : 0.85}"/>`
     : "";
+
+  const reading = muted ? "muted" : known ? value + "%" : "--";
 
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">' +
     `<rect width="200" height="100" fill="${look.bg}"/>` +
     `<text x="18" y="40" font-family="Segoe UI, sans-serif" font-size="17"` +
-    ` fill="${look.text}">${role.label}</text>` +
+    ` fill="${muted ? "#8b6f72" : look.text}">${role.label}</text>` +
     `<text x="182" y="40" font-family="Segoe UI, sans-serif" font-size="19"` +
-    ` fill="${look.text}" text-anchor="end">${known ? value + "%" : "--"}</text>` +
+    ` fill="${muted ? ink : look.text}" text-anchor="end">${reading}</text>` +
     bar +
     "</svg>"
   );
@@ -455,6 +473,8 @@ function main() {
   let startedAt = null; // when the present recording began
   let micLevel = -1;
   let outputLevel = -1;
+  let micMuted = false;
+  let outputMuted = false;
 
   const send = (payload) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -484,7 +504,7 @@ function main() {
       for (const [context, column] of strips) {
         const offset = column - first;
         const image = resting
-          ? asImage(idleSegment(ROLES[offset], levelFor(offset)))
+          ? asImage(idleSegment(ROLES[offset], levelFor(offset), mutedFor(offset)))
           : asImage(stripSegment(offset, span, current, phase, seconds));
         send({ event: "setFeedback", context, payload: { canvas: image } });
       }
@@ -524,22 +544,29 @@ function main() {
 
   const levelFor = (offset) =>
     ROLES[offset] === undefined ? -1 : offset === 0 ? micLevel : outputLevel;
+  const mutedFor = (offset) => (offset === 0 ? micMuted : outputMuted);
 
   const refreshMic = () =>
     request("GET", "/mic", (body) => {
-      if (typeof body.volume === "number" && body.volume !== micLevel) {
-        micLevel = body.volume;
-        paint();
-      }
+      const changed = body.volume !== micLevel || !!body.muted !== micMuted;
+      if (typeof body.volume === "number") micLevel = body.volume;
+      micMuted = !!body.muted;
+      if (changed) paint();
     });
 
   const refreshOutput = () =>
     request("GET", "/output", (body) => {
-      if (typeof body.volume === "number" && body.volume !== outputLevel) {
-        outputLevel = body.volume;
-        paint();
-      }
+      const changed = body.volume !== outputLevel || !!body.muted !== outputMuted;
+      if (typeof body.volume === "number") outputLevel = body.volume;
+      outputMuted = !!body.muted;
+      if (changed) paint();
     });
+
+  /// Which dial a message came from, as an index into ROLES.
+  const offsetOf = (context) => {
+    if (!strips.has(context)) return -1;
+    return strips.get(context) - Math.min(...strips.values());
+  };
 
   socket.on("open", () => {
     send({ event: args.registerEvent, uuid: args.pluginUUID });
@@ -604,15 +631,34 @@ function main() {
         break;
       }
 
-      case "dialDown":
+      // Pressing a dial acts on what that dial controls. Muting is the
+      // obvious partner to a level, and it wants to be instant -- reaching
+      // for a shortcut when someone can already hear you is too late.
+      case "dialDown": {
+        const offset = offsetOf(context);
+        const role = ROLES[offset];
+        if (!role) break;
+
+        const next = offset === 0 ? !micMuted : !outputMuted;
+        if (offset === 0) micMuted = next;
+        else outputMuted = next;
+
+        // Drawn before the request goes out, so the strip answers the press
+        // immediately rather than a round trip later.
+        paint();
+        request("POST", role.mute(next));
+        break;
+      }
+
+      // Tapping the screen still starts and stops a note. It is a
+      // deliberate, aimed gesture, where a dial press is a reflex.
       case "touchTap":
         request("POST", "/action/notes/toggle");
         break;
 
       case "dialRotate": {
         const ticks = (message.payload && message.payload.ticks) || 0;
-        const columns = [...strips.values()];
-        const offset = (strips.get(context) || 0) - Math.min(...columns);
+        const offset = offsetOf(context);
         const role = ROLES[offset];
         if (!role) break;
 

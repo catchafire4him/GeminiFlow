@@ -109,6 +109,21 @@ pub fn output_volume() -> Result<i64> {
     Ok((scalar * 100.0).round() as i64)
 }
 
+pub fn output_muted() -> Result<bool> {
+    let endpoint = output_endpoint()?;
+    let muted = unsafe { endpoint.GetMute() }
+        .map_err(|e| anyhow!("could not read the mute state: {e}"))?;
+    Ok(muted.as_bool())
+}
+
+pub fn set_output_muted(muted: bool) -> Result<()> {
+    let endpoint = output_endpoint()?;
+    unsafe { endpoint.SetMute(muted, std::ptr::null()) }
+        .map_err(|e| anyhow!("could not change the mute state: {e}"))?;
+    crate::logln!("[mic] speakers {}", if muted { "muted" } else { "unmuted" });
+    Ok(())
+}
+
 pub fn set_output_volume(percent: i64) -> Result<()> {
     let endpoint = output_endpoint()?;
     let scalar = percent.clamp(0, 100) as f32 / 100.0;

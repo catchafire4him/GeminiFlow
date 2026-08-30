@@ -189,12 +189,51 @@ fn handle(mut stream: TcpStream, state: &Arc<AppState>, token: &str) -> Result<(
 
         ("GET", "/output") => {
             let volume = crate::mic::output_volume().unwrap_or(-1);
+            let muted = crate::mic::output_muted().unwrap_or(false);
             respond(
                 &mut stream,
                 200,
                 "application/json",
-                &json!({ "volume": volume }).to_string(),
+                &json!({ "volume": volume, "muted": muted }).to_string(),
             )
+        }
+
+        // Mute is sent as the state wanted rather than as a toggle, so a
+        // dropped request cannot leave the caller's idea of it inverted.
+        ("POST", p) if p.starts_with("/mic/mute/") => {
+            let wanted = p.ends_with("/true");
+            match crate::mic::set_muted(input_device(state).as_deref(), wanted) {
+                Ok(()) => respond(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &json!({ "muted": wanted }).to_string(),
+                ),
+                Err(e) => respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    &json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
+        }
+
+        ("POST", p) if p.starts_with("/output/mute/") => {
+            let wanted = p.ends_with("/true");
+            match crate::mic::set_output_muted(wanted) {
+                Ok(()) => respond(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &json!({ "muted": wanted }).to_string(),
+                ),
+                Err(e) => respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    &json!({ "error": e.to_string() }).to_string(),
+                ),
+            }
         }
 
         ("POST", p) if p.starts_with("/output/volume/") => {

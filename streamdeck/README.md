@@ -50,9 +50,13 @@ drive the same recording.
 
 **Status** goes on the touch strip of a Stream Deck +. It shows what the app
 is doing, how long the current recording has run, and the microphone level
-along the bottom. Turn its dial to change the microphone level — the same
-setting the slider in Settings changes, not a second one beside it. Push the
-dial or tap the strip to start or stop a note.
+along the bottom. Each dial controls its own thing: the leftmost the microphone, the next the
+system volume. Turn to change the level, press to mute or unmute it. These
+are the real Windows controls -- the same ones the slider in Settings moves --
+not a second set that would drift away from them.
+
+Tapping the screen still starts or stops a note. A tap is aimed; a dial press
+is a reflex, and muting is the thing you want under a reflex.
 
 The strip takes one quarter of the display. A plugin cannot span the whole
 thing; each quarter belongs to one dial.
