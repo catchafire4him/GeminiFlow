@@ -41,12 +41,13 @@ pub fn run() {
     // failed every time, or that live was simply switched off.
     crate::logln!(
         "[config] live streaming {}, language {}, paste {}, speakerphone {}, \
-         keep dictation audio {}, verbose {}",
+         keep dictation audio {}, external control {}, verbose {}",
         if settings.use_live { "on" } else { "off" },
         settings.language,
         settings.paste_mode,
         if settings.speakerphone { "on" } else { "off" },
         if settings.keep_dictation_audio { "on" } else { "off" },
+        if settings.control_enabled { "on" } else { "off" },
         if settings.debug_logging { "on" } else { "off" },
     );
 

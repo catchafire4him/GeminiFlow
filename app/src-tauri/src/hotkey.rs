@@ -13,7 +13,8 @@ use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO,
+    GetAsyncKeyState, GetLastInputInfo, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD,
+    KEYBDINPUT, KEYEVENTF_KEYUP, LASTINPUTINFO, VIRTUAL_KEY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PostThreadMessageW, SetWindowsHookExW,
@@ -272,6 +273,47 @@ unsafe fn reinstall_hook() {
     }
 }
 
+/// A key nothing responds to, used to ask whether the hook is still alive.
+///
+/// 0xFC is reserved and unassigned, so no application acts on it.
+const PROBE_KEY: u16 = 0xFC;
+
+/// Whether Windows is still delivering keystrokes to us.
+///
+/// Sends one keystroke nothing reacts to and checks whether the hook was
+/// told about it. This is the only reliable answer available: there is no
+/// API that reports whether a hook is still installed, and the handle stays
+/// valid after Windows removes it.
+///
+/// Only called when something already looks wrong, so in normal use no
+/// synthetic keystrokes are produced at all.
+fn hook_is_alive() -> bool {
+    let before = HOOK_CALLS.load(Ordering::Relaxed);
+
+    let key = |flags| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(PROBE_KEY),
+                wScan: 0,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    };
+
+    unsafe {
+        let events = [key(Default::default()), key(KEYEVENTF_KEYUP)];
+        SendInput(&events, std::mem::size_of::<INPUT>() as i32);
+    }
+
+    // The hook runs on the pump thread, so the callback lands a moment
+    // after SendInput returns rather than during it.
+    std::thread::sleep(std::time::Duration::from_millis(150));
+    HOOK_CALLS.load(Ordering::Relaxed) != before
+}
+
 /// Tick of the last user input of any kind, mouse included.
 fn last_input_tick() -> u32 {
     let mut info = LASTINPUTINFO {
@@ -332,28 +374,41 @@ pub fn install_and_pump(tx: Sender<Event>) -> Result<()> {
                 // That is exactly what "the shortcuts stopped working after
                 // a while" looks like, and nothing here used to recover it.
                 //
-                // GetLastInputInfo counts mouse movement too, so one quiet
-                // round can just mean the user is reading. Three rounds --
-                // fifteen seconds of input without a single keyboard
-                // callback -- is the threshold. A needless reinstall costs
-                // microseconds, so this deliberately errs toward acting.
+                // This is only a suspicion, never a conclusion.
+                // GetLastInputInfo counts mouse movement, so someone
+                // reading a page with a trackpad looks exactly like a dead
+                // hook. Acting on it directly rebuilt the hook three times
+                // in the first minute of ordinary use.
+                //
+                // So suspicion only triggers a test: send a keystroke
+                // nothing responds to and see whether we hear about it.
+                // That distinguishes the two cases exactly, and costs one
+                // synthetic keypress on the rare occasions it runs.
                 let input = last_input_tick();
                 if input != last_input && calls == last_calls {
                     silent_rounds += 1;
                     if silent_rounds >= 3 {
-                        crate::logln!(
-                            "[hotkey] WARNING no hook callbacks during {}s of user \
-                             input -- assuming Windows dropped the hook",
-                            silent_rounds * 5
-                        );
-                        // Already inside the enclosing unsafe block.
-                        let _ = PostThreadMessageW(
-                            PUMP_TID.load(Ordering::SeqCst),
-                            WM_REINSTALL_HOOK,
-                            WPARAM(0),
-                            LPARAM(0),
-                        );
                         silent_rounds = 0;
+                        if hook_is_alive() {
+                            if crate::logging::debug_enabled() {
+                                crate::logln!(
+                                    "[hotkey] quiet for 15s but the hook answered \
+                                     the probe -- no action"
+                                );
+                            }
+                        } else {
+                            crate::logln!(
+                                "[hotkey] WARNING the hook did not see a test \
+                                 keystroke -- Windows has dropped it, rebuilding"
+                            );
+                            // Already inside the enclosing unsafe block.
+                            let _ = PostThreadMessageW(
+                                PUMP_TID.load(Ordering::SeqCst),
+                                WM_REINSTALL_HOOK,
+                                WPARAM(0),
+                                LPARAM(0),
+                            );
+                        }
                     }
                 } else {
                     silent_rounds = 0;
