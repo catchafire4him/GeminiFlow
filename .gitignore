@@ -21,3 +21,4 @@ desktop.ini
 
 # Tauri generated
 app/src-tauri/gen/
+streamdeck/com.geminiflow.control.sdPlugin/node_modules/

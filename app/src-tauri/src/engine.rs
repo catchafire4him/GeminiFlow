@@ -650,6 +650,7 @@ fn stop_note(
     // microphone produced a mystifying "no speech was recognised" after a
     // full transcription round-trip instead of an immediate, accurate error.
     if peak < 0.005 {
+        log_microphone_state(session.settings.input_device.as_deref());
         set_error(
             app,
             state,
@@ -959,6 +960,28 @@ fn begin(
     })
 }
 
+/// Reports the microphone's own level and mute state.
+///
+/// Called when a recording comes back empty. "Check it is not muted" is
+/// advice; this is the answer. Windows keeps a wireless headset's
+/// microphone listed while the headset is switched off, so a device that
+/// looks present and records nothing is an ordinary situation rather than
+/// a strange one.
+fn log_microphone_state(device: Option<&str>) {
+    match (crate::mic::volume(device), crate::mic::is_muted(device)) {
+        (Ok(level), Ok(muted)) => crate::logln!(
+            "[engine] microphone {:?} is at {level}% and {}",
+            device.unwrap_or("(system default)"),
+            if muted { "MUTED" } else { "not muted" }
+        ),
+        _ => crate::logln!(
+            "[engine] could not read the state of microphone {:?} -- it may be \
+             disconnected",
+            device.unwrap_or("(system default)")
+        ),
+    }
+}
+
 /// Event-loop half: stop the recorder, sanity-check the audio, hand it off.
 /// Deliberately does no network work -- blocking here freezes every shortcut.
 fn stop_dictation(
@@ -989,6 +1012,7 @@ fn stop_dictation(
         return Ok(None);
     }
     if peak < 0.005 {
+        log_microphone_state(session.settings.input_device.as_deref());
         set_error(
             app,
             state,

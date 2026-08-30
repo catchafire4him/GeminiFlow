@@ -305,7 +305,19 @@ fn hook_is_alive() -> bool {
 
     unsafe {
         let events = [key(Default::default()), key(KEYEVENTF_KEYUP)];
-        SendInput(&events, std::mem::size_of::<INPUT>() as i32);
+        let sent = SendInput(&events, std::mem::size_of::<INPUT>() as i32);
+        if sent as usize != events.len() {
+            // Windows refuses synthetic input while a window running with
+            // higher privileges has focus. That is a failure to ask the
+            // question, not an answer to it -- reporting the hook dead
+            // here would rebuild it every time an installer or an admin
+            // console was in front.
+            crate::logln!(
+                "[hotkey] could not send the test keystroke; assuming the hook \
+                 is fine and trying again later"
+            );
+            return true;
+        }
     }
 
     // The hook runs on the pump thread, so the callback lands a moment

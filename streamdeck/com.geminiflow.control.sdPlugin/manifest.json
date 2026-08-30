@@ -1,0 +1,41 @@
+{
+  "Name": "GeminiFlow",
+  "Version": "0.1.0.0",
+  "Author": "GeminiFlow",
+  "URL": "https://github.com/catchafire4him/GeminiFlow",
+  "Description": "Start dictation, notes and calls in GeminiFlow, with buttons that show what the app is actually doing.",
+  "Category": "GeminiFlow",
+  "CategoryIcon": "imgs/category",
+  "Icon": "imgs/plugin",
+  "CodePath": "plugin.js",
+  "SDKVersion": 2,
+  "UUID": "com.geminiflow.control",
+  "Nodejs": {
+    "Version": "20",
+    "Debug": "enabled"
+  },
+  "Software": {
+    "MinimumVersion": "6.5"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Actions": [
+    {
+      "Name": "Note",
+      "UUID": "com.geminiflow.control.note",
+      "Icon": "imgs/note",
+      "Tooltip": "Press once to start a note, again to stop. Lights up while recording.",
+      "Controllers": ["Keypad"],
+      "States": [
+        {
+          "Image": "imgs/note",
+          "TitleAlignment": "bottom"
+        }
+      ]
+    }
+  ]
+}
