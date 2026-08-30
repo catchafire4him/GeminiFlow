@@ -16,13 +16,32 @@ use serde_json::{json, Value};
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 pub struct BatchClient {
-    http: reqwest::blocking::Client,
+    // Deliberately holds nothing. See `client`.
 }
 
 impl BatchClient {
     pub fn new() -> Result<Self> {
-        Ok(BatchClient {
-            http: reqwest::blocking::Client::builder()
+        Ok(BatchClient {})
+    }
+
+/// A brand new HTTP client for one attempt.
+///
+/// Not a long-lived client, and not merely an unpooled one. Turning off
+/// idle pooling was supposed to stop a bad connection to this host from
+/// stalling later requests, and it did not: measured on 29 August, the
+/// first request after startup completed in two seconds and every one after
+/// it took forty to sixty, on both this client and the transcription one.
+/// A plain request to the same host from the same machine at the same time
+/// took 75 ms, so neither the network nor the service was at fault.
+///
+/// Whatever state goes bad lives in the client, so no client outlives the
+/// attempt that created it. A fresh connection costs about 75 ms against
+/// requests that take seconds, which is a trade worth making twice over.
+///
+/// Do NOT set http1_only(): this endpoint requires HTTP/2 and every request
+/// fails outright with a transport error.
+    fn client() -> reqwest::Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder()
                 .timeout(Duration::from_secs(60))
                 .connect_timeout(Duration::from_secs(10))
                 // No connection reuse.
@@ -40,16 +59,14 @@ impl BatchClient {
                 // http1_only(): this endpoint requires HTTP/2 and every request
                 // fails outright with a transport error.
                 .pool_max_idle_per_host(0)
-                .build()?,
-        })
+                .build()
     }
 
     fn send_once(
-        &self,
         api_key: &str,
         body: &Value,
     ) -> Result<reqwest::blocking::Response, reqwest::Error> {
-        self.http
+        Self::client()?
             .post(ENDPOINT)
             .header("x-goog-api-key", api_key)
             .json(body)
@@ -107,12 +124,12 @@ impl BatchClient {
         // costs a moment rather than the whole dictation. HTTP error statuses
         // are NOT retried -- those the server did answer, and repeating them
         // just bills twice.
-        let response = match self.send_once(api_key, &body) {
+        let response = match Self::send_once(api_key, &body) {
             Ok(response) => response,
             Err(first) => {
                 crate::logln!("[batch] request failed ({first}); retrying once");
                 std::thread::sleep(Duration::from_millis(400));
-                self.send_once(api_key, &body).map_err(|second| {
+                Self::send_once(api_key, &body).map_err(|second| {
                     anyhow!("could not reach the transcription service: {second}")
                 })?
             }

@@ -97,21 +97,36 @@ Transcript:
 ";
 
 pub struct NotesClient {
-    http: reqwest::blocking::Client,
+    // Deliberately holds nothing. See `client`.
 }
 
 impl NotesClient {
     pub fn new() -> Result<Self> {
-        Ok(NotesClient {
-            http: reqwest::blocking::Client::builder()
-                .timeout(Duration::from_secs(40))
-                .connect_timeout(Duration::from_secs(10))
-                // Same reason as the transcription client: a pooled HTTP/2
-                // connection to this host stalls later requests when it goes
-                // bad. See PLAN.md.
-                .pool_max_idle_per_host(0)
-                .build()?,
-        })
+        Ok(NotesClient {})
+    }
+
+/// A brand new HTTP client for one attempt.
+///
+/// Not a long-lived client, and not merely an unpooled one. Turning off
+/// idle pooling was supposed to stop a bad connection to this host from
+/// stalling later requests, and it did not: measured on 29 August, the
+/// first request after startup completed in two seconds and every one after
+/// it took forty to sixty, on both this client and the transcription one.
+/// A plain request to the same host from the same machine at the same time
+/// took 75 ms, so neither the network nor the service was at fault.
+///
+/// Whatever state goes bad lives in the client, so no client outlives the
+/// attempt that created it. A fresh connection costs about 75 ms against
+/// requests that take seconds, which is a trade worth making twice over.
+///
+/// Do NOT set http1_only(): this endpoint requires HTTP/2 and every request
+/// fails outright with a transport error.
+    fn client() -> reqwest::Result<reqwest::blocking::Client> {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(40))
+            .connect_timeout(Duration::from_secs(10))
+            .pool_max_idle_per_host(0)
+            .build()
     }
 
     pub fn structure(
@@ -141,15 +156,22 @@ impl NotesClient {
                 std::thread::sleep(Duration::from_millis(1500 * attempt));
             }
 
-            let sent = self
-                .http
-                .post(ENDPOINT)
-                .header("x-goog-api-key", api_key)
-                .json(&body)
-                .send();
+            let started = std::time::Instant::now();
+            let sent = match Self::client() {
+                Ok(http) => http
+                    .post(ENDPOINT)
+                    .header("x-goog-api-key", api_key)
+                    .json(&body)
+                    .send(),
+                Err(e) => Err(e),
+            };
 
             match sent {
                 Ok(r) if r.status().is_success() => {
+                    crate::logln!(
+                        "[notes] summarised in {} ms",
+                        started.elapsed().as_millis()
+                    );
                     response = Some(r);
                     break;
                 }
@@ -164,7 +186,11 @@ impl NotesClient {
                 }
                 Err(e) => {
                     last = e.to_string();
-                    crate::logln!("[notes] request failed ({last}) -- retrying ({})", attempt + 1);
+                    crate::logln!(
+                        "[notes] request failed after {} ms ({last}) -- retrying ({})",
+                        started.elapsed().as_millis(),
+                        attempt + 1
+                    );
                 }
             }
         }

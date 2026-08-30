@@ -68,16 +68,13 @@ The two most likely causes are external control being off in GeminiFlow, and
 
 ## About the animation
 
-Two of the states -- recording and working -- have their movement written into
-the drawing itself rather than pushed to the button frame by frame. Stream Deck
-will not accept an animated image file through the API, so this is the cheap
-route if it works at all.
+Stream Deck does not play animation written inside a drawing -- it renders one
+still frame -- and it does not accept animated image files through the plugin
+interface at all. Tested on 29 August 2026.
 
-Look at the button while a note is recording. A ring should pulse outward from
-the red dot, and three dots should take turns brightening while it transcribes.
-If they sit still instead, Stream Deck is drawing a single frame and animation
-has to be done the expensive way, by sending a new picture ten times a second.
-Either answer is useful; nothing else needs to change to find out.
+So the plugin draws the frames itself, sending a new picture ten times a
+second, which is the rate Elgato asks plugins to stay within. The timer only
+runs while something is actually moving, so an idle button costs nothing.
 
 ## Status
 
