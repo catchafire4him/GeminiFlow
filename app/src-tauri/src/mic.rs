@@ -11,7 +11,8 @@
 use anyhow::{anyhow, Result};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+    eCapture, eConsole, eRender, IMMDeviceEnumerator, MMDeviceEnumerator,
+    DEVICE_STATE_ACTIVE,
 };
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{
@@ -78,6 +79,41 @@ fn endpoint(preferred: Option<&str>) -> Result<IAudioEndpointVolume> {
             .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
             .map_err(|e| anyhow!("could not open the level control: {e}"))
     }
+}
+
+/// The default playback device's volume control.
+///
+/// Here only so a spare dial has something worth doing while nothing is
+/// recording. Always the system default rather than a configured device:
+/// there is no setting for which speakers to use, and inventing one to
+/// serve a dial would be the tail wagging the dog.
+fn output_endpoint() -> Result<IAudioEndpointVolume> {
+    ensure_com();
+    unsafe {
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| anyhow!("could not reach the audio devices: {e}"))?;
+        let device = enumerator
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| anyhow!("no default speakers: {e}"))?;
+        device
+            .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
+            .map_err(|e| anyhow!("could not open the volume control: {e}"))
+    }
+}
+
+pub fn output_volume() -> Result<i64> {
+    let endpoint = output_endpoint()?;
+    let scalar = unsafe { endpoint.GetMasterVolumeLevelScalar() }
+        .map_err(|e| anyhow!("could not read the volume: {e}"))?;
+    Ok((scalar * 100.0).round() as i64)
+}
+
+pub fn set_output_volume(percent: i64) -> Result<()> {
+    let endpoint = output_endpoint()?;
+    let scalar = percent.clamp(0, 100) as f32 / 100.0;
+    unsafe { endpoint.SetMasterVolumeLevelScalar(scalar, std::ptr::null()) }
+        .map_err(|e| anyhow!("could not set the volume: {e}"))
 }
 
 /// Current level, 0-100.

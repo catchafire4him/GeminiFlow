@@ -187,6 +187,41 @@ fn handle(mut stream: TcpStream, state: &Arc<AppState>, token: &str) -> Result<(
             )
         }
 
+        ("GET", "/output") => {
+            let volume = crate::mic::output_volume().unwrap_or(-1);
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({ "volume": volume }).to_string(),
+            )
+        }
+
+        ("POST", p) if p.starts_with("/output/volume/") => {
+            match p.trim_start_matches("/output/volume/").parse::<i64>() {
+                Ok(level) => match crate::mic::set_output_volume(level) {
+                    Ok(()) => respond(
+                        &mut stream,
+                        200,
+                        "application/json",
+                        &json!({ "volume": level.clamp(0, 100) }).to_string(),
+                    ),
+                    Err(e) => respond(
+                        &mut stream,
+                        400,
+                        "application/json",
+                        &json!({ "error": e.to_string() }).to_string(),
+                    ),
+                },
+                Err(_) => respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    r#"{"error":"level must be a whole number"}"#,
+                ),
+            }
+        }
+
         ("POST", p) if p.starts_with("/mic/volume/") => {
             match p.trim_start_matches("/mic/volume/").parse::<i64>() {
                 Ok(level) => {

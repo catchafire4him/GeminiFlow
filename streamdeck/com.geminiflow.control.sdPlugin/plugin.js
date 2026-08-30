@@ -297,19 +297,26 @@ function keyFace(action, state, phase) {
 
 // --------------------------------------------------------- the touch strip
 //
-// 200 x 100, which is one quarter of the strip. A plugin cannot span the whole
-// thing: each quarter belongs to one dial.
+// A quarter is 200 x 100 and no plugin can span the strip -- but four
+// instances placed side by side can each show a different slice of one wider
+// drawing. The scene is composed once at the full width, and every segment
+// renders it through its own window onto it. That is what makes four quarters
+// read as a single display rather than four small ones.
+//
+// The slicing is free: an SVG viewBox is exactly a window onto a larger scene,
+// so there is one drawing and four viewports, not four drawings to keep in
+// step.
 
 const STRIP_WORDS = {
   offline: "GeminiFlow offline",
   idle: "Ready",
-  arming: "Starting…",
+  arming: "Starting",
   recording: "Dictating",
   noteRecording: "Recording a note",
   callRecording: "Recording a call",
-  finalizing: "Transcribing…",
-  noteProcessing: "Writing it up…",
-  injecting: "Typing it out…",
+  finalizing: "Transcribing",
+  noteProcessing: "Writing it up",
+  injecting: "Typing it out",
   error: "Something failed",
 };
 
@@ -322,41 +329,100 @@ function stripMood(state) {
   return "busy";
 }
 
-function stripFace(state, phase, seconds, micLevel) {
+const clock = (seconds) =>
+  `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+
+/// The shared scene, composed `span` quarters wide.
+function wideScene(span, state, phase, seconds) {
+  const width = span * 200;
   const mood = stripMood(state);
   const look = PALETTE[mood] || PALETTE.idle;
+  const roomy = width >= 400;
 
+  const dotX = roomy ? 46 : 30;
   const art =
     mood === "record" || mood === "call"
-      ? pulse(look.ink, phase, 30, 40, 11)
+      ? pulse(look.ink, phase, dotX, 50, roomy ? 14 : 11)
       : mood === "busy"
-        ? working(look.ink, phase, 30, 40)
-        : `<circle cx="30" cy="40" r="11" fill="none" stroke="${look.ink}" stroke-width="3"/>`;
+        ? working(look.ink, phase, dotX, 50)
+        : `<circle cx="${dotX}" cy="50" r="${roomy ? 14 : 11}" fill="none"` +
+          ` stroke="${look.ink}" stroke-width="3"/>`;
 
-  const elapsed =
-    seconds != null
-      ? `<text x="186" y="47" font-family="Segoe UI, sans-serif" font-size="24"` +
-        ` fill="${look.text}" text-anchor="end">${Math.floor(seconds / 60)}:${String(
-          Math.floor(seconds % 60)
-        ).padStart(2, "0")}</text>`
+  const words = STRIP_WORDS[state] || state;
+
+  // On a single quarter the label and the clock cannot share a line -- they
+  // overlapped, which is what prompted the wide version. Stacked when narrow,
+  // side by side when there is room.
+  const text = roomy
+    ? `<text x="${dotX + 34}" y="59" font-family="Segoe UI, sans-serif" font-size="26"` +
+      ` fill="${look.text}">${words}</text>` +
+      (seconds != null
+        ? `<text x="${width - 24}" y="59" font-family="Segoe UI, sans-serif"` +
+          ` font-size="30" fill="${look.text}" text-anchor="end">${clock(seconds)}</text>`
+        : "")
+    : `<text x="${dotX + 22}" y="${seconds != null ? 40 : 56}"` +
+      ` font-family="Segoe UI, sans-serif" font-size="15" fill="${look.text}">${words}</text>` +
+      (seconds != null
+        ? `<text x="${dotX + 22}" y="66" font-family="Segoe UI, sans-serif" font-size="22"` +
+          ` fill="${look.text}">${clock(seconds)}</text>`
+        : "");
+
+  // A line that travels the whole width while something is happening. Wide
+  // movement is what the extra room buys; a small pulse gains nothing from it.
+  const sweep =
+    mood === "record" || mood === "call" || mood === "busy"
+      ? `<rect x="0" y="94" width="${width}" height="4" fill="${look.ink}" opacity="0.12"/>` +
+        `<rect x="${(width * phase).toFixed(1)}" y="94" width="${(width * 0.18).toFixed(1)}"` +
+        ` height="4" fill="${look.ink}" opacity="0.85"/>`
       : "";
 
-  // The microphone level along the bottom, so the dial has something to point
-  // at while it is being turned.
-  const bar =
-    micLevel >= 0
-      ? '<rect x="14" y="80" width="172" height="6" rx="3" fill="#ffffff" opacity="0.12"/>' +
-        `<rect x="14" y="80" width="${((172 * micLevel) / 100).toFixed(1)}" height="6" rx="3"` +
-        ` fill="${look.ink}" opacity="0.8"/>`
-      : "";
+  return `<rect width="${width}" height="100" fill="${look.bg}"/>` + art + text + sweep;
+}
+
+/// One quarter's window onto the shared scene.
+function stripSegment(offset, span, state, phase, seconds) {
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"` +
+    ` viewBox="${offset * 200} 0 200 100">` +
+    wideScene(span, state, phase, seconds) +
+    "</svg>"
+  );
+}
+
+// What a dial does while nothing is being recorded. Assigned by position:
+// leftmost segment takes the microphone, the next takes the speakers, any
+// beyond that are display only.
+const ROLES = [
+  { id: "mic", label: "Microphone", route: (v) => `/mic/volume/${v}` },
+  { id: "output", label: "Volume", route: (v) => `/output/volume/${v}` },
+];
+
+/// A quarter at rest, showing whatever its own dial controls.
+function idleSegment(role, value) {
+  const look = PALETTE.idle;
+  if (!role) {
+    return (
+      '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">' +
+      `<rect width="200" height="100" fill="${look.bg}"/>` +
+      `<text x="100" y="56" font-family="Segoe UI, sans-serif" font-size="17"` +
+      ` fill="${look.text}" text-anchor="middle" opacity="0.6">GeminiFlow</text></svg>`
+    );
+  }
+
+  const known = value >= 0;
+  const bar = known
+    ? '<rect x="18" y="62" width="164" height="7" rx="3.5" fill="#ffffff" opacity="0.12"/>' +
+      `<rect x="18" y="62" width="${((164 * value) / 100).toFixed(1)}" height="7" rx="3.5"` +
+      ` fill="${look.ink}" opacity="0.85"/>`
+    : "";
 
   return (
     '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100" viewBox="0 0 200 100">' +
     `<rect width="200" height="100" fill="${look.bg}"/>` +
-    art +
-    `<text x="52" y="47" font-family="Segoe UI, sans-serif" font-size="17"` +
-    ` fill="${look.text}">${STRIP_WORDS[state] || state}</text>` +
-    elapsed +
+    `<text x="18" y="40" font-family="Segoe UI, sans-serif" font-size="17"` +
+    ` fill="${look.text}">${role.label}</text>` +
+    `<text x="182" y="40" font-family="Segoe UI, sans-serif" font-size="19"` +
+    ` fill="${look.text}" text-anchor="end">${known ? value + "%" : "--"}</text>` +
     bar +
     "</svg>"
   );
@@ -379,13 +445,16 @@ function main() {
   // Every visible instance, by context. A button on an inactive page has no
   // context to draw to, so they are tracked as they appear and disappear.
   const keys = new Map(); // context -> action uuid
-  const strips = new Set(); // encoder contexts
+  // Encoder contexts and which column of the strip each one occupies. The
+  // column is what lets four of them show one picture between them.
+  const strips = new Map(); // context -> column
 
   let current = "offline";
   let phase = 0;
   let ticker = null;
   let startedAt = null; // when the present recording began
   let micLevel = -1;
+  let outputLevel = -1;
 
   const send = (payload) => {
     if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(payload));
@@ -406,9 +475,17 @@ function main() {
     }
 
     if (strips.size > 0) {
+      const columns = [...strips.values()];
+      const first = Math.min(...columns);
+      const span = Math.max(...columns) - first + 1;
       const seconds = startedAt ? (Date.now() - startedAt) / 1000 : null;
-      const image = asImage(stripFace(current, phase, seconds, micLevel));
-      for (const context of strips) {
+      const resting = current === "idle" || current === "offline";
+
+      for (const [context, column] of strips) {
+        const offset = column - first;
+        const image = resting
+          ? asImage(idleSegment(ROLES[offset], levelFor(offset)))
+          : asImage(stripSegment(offset, span, current, phase, seconds));
         send({ event: "setFeedback", context, payload: { canvas: image } });
       }
     }
@@ -425,11 +502,19 @@ function main() {
     const stripMoving = strips.size > 0 && MOVING.has(stripMood(current));
     const wanted = keysMoving || stripMoving;
 
+    // Elgato asks plugins to keep touch strip updates to about ten a
+    // second. Four segments each redrawing ten times would be four times
+    // that, so the rate is shared out between them and the movement is
+    // slowed to match -- a sweep travelling the full width reads perfectly
+    // well at five frames a second, where a small fast pulse would not.
+    const interval = Math.max(100, strips.size * 50);
+    const step = interval / 2000; // one full cycle every two seconds
+
     if (wanted && !ticker) {
       ticker = setInterval(() => {
-        phase = (phase + 0.1) % 1;
+        phase = (phase + step) % 1;
         paint();
-      }, 100);
+      }, interval);
     } else if (!wanted && ticker) {
       clearInterval(ticker);
       ticker = null;
@@ -437,10 +522,21 @@ function main() {
     }
   };
 
+  const levelFor = (offset) =>
+    ROLES[offset] === undefined ? -1 : offset === 0 ? micLevel : outputLevel;
+
   const refreshMic = () =>
     request("GET", "/mic", (body) => {
       if (typeof body.volume === "number" && body.volume !== micLevel) {
         micLevel = body.volume;
+        paint();
+      }
+    });
+
+  const refreshOutput = () =>
+    request("GET", "/output", (body) => {
+      if (typeof body.volume === "number" && body.volume !== outputLevel) {
+        outputLevel = body.volume;
         paint();
       }
     });
@@ -465,6 +561,7 @@ function main() {
     });
 
     refreshMic();
+    refreshOutput();
   });
 
   socket.on("message", (raw) => {
@@ -479,8 +576,15 @@ function main() {
 
     switch (event) {
       case "willAppear":
-        if (action === "com.geminiflow.control.status") strips.add(context);
-        else keys.set(context, action);
+        if (action === "com.geminiflow.control.status") {
+          const column =
+            (message.payload &&
+              message.payload.coordinates &&
+              message.payload.coordinates.column) ||
+            0;
+          strips.set(context, column);
+          refreshOutput();
+        } else keys.set(context, action);
         // Paint at once, so a button appearing mid-recording shows the truth
         // rather than waiting for the next change.
         paint();
@@ -507,15 +611,24 @@ function main() {
 
       case "dialRotate": {
         const ticks = (message.payload && message.payload.ticks) || 0;
-        if (micLevel < 0) {
-          refreshMic();
+        const columns = [...strips.values()];
+        const offset = (strips.get(context) || 0) - Math.min(...columns);
+        const role = ROLES[offset];
+        if (!role) break;
+
+        const at = offset === 0 ? micLevel : outputLevel;
+        if (at < 0) {
+          offset === 0 ? refreshMic() : refreshOutput();
           break;
         }
-        micLevel = Math.max(0, Math.min(100, micLevel + ticks * 2));
+        const next = Math.max(0, Math.min(100, at + ticks * 2));
+        if (offset === 0) micLevel = next;
+        else outputLevel = next;
+
         // Redrawn before the request goes out, so the strip tracks the dial
-        // instead of lagging a round trip behind it.
+        // rather than lagging a round trip behind it.
         paint();
-        request("POST", `/mic/volume/${micLevel}`);
+        request("POST", role.route(next));
         break;
       }
     }

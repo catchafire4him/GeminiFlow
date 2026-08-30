@@ -4,7 +4,7 @@
 //!
 //! Runs on its own thread. Nothing here may block the keyboard hook thread.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -78,7 +78,18 @@ impl AppState {
     }
 }
 
+/// The shared state, for deferred work that outlives its caller.
+static APP_STATE: std::sync::OnceLock<Arc<AppState>> = std::sync::OnceLock::new();
+
+/// Counts published statuses.
+///
+/// A timer that wants to change the state later has to know whether
+/// anything happened in the meantime. Comparing the status itself would
+/// not do -- two identical errors in a row are still two events.
+static STATUS_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn publish(app: &AppHandle, state: &AppState, status: Status) {
+    STATUS_SEQ.fetch_add(1, Ordering::SeqCst);
     if let Ok(mut current) = state.status.lock() {
         *current = status.clone();
     }
@@ -136,6 +147,12 @@ fn set_state(app: &AppHandle, state: &AppState, s: State) {
     );
 }
 
+/// How long a failure stays on show before the app calls itself ready again.
+///
+/// Matches how long the overlay lingers, so the pill and anything else
+/// watching agree about when the failure stopped being current.
+const ERROR_LINGER: Duration = Duration::from_secs(5);
+
 fn set_error(app: &AppHandle, state: &AppState, message: impl Into<String>) {
     let message = message.into();
     crate::logln!("engine error: {message}");
@@ -148,6 +165,27 @@ fn set_error(app: &AppHandle, state: &AppState, message: impl Into<String>) {
             partial: None,
         },
     );
+
+    // Then return to idle on its own.
+    //
+    // The overlay used to hide itself while the state stayed Error forever.
+    // That was invisible until something else started watching: a Stream Deck
+    // button sat on "failed" indefinitely after a trivial problem, because
+    // that genuinely was still the app state. Hiding a stale state is not the
+    // same as clearing it.
+    let seq = STATUS_SEQ.load(Ordering::SeqCst);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(ERROR_LINGER);
+        // Anything published since means this failure is no longer what is
+        // happening, and whoever published last owns the state now.
+        if STATUS_SEQ.load(Ordering::SeqCst) != seq {
+            return;
+        }
+        if let Some(state) = APP_STATE.get() {
+            publish(&app, state, Status::default());
+        }
+    });
 }
 
 /// Perceptual-ish level for the meter: RMS, then a curve that makes normal
@@ -180,6 +218,10 @@ fn describe_mods(mods: u32) -> String {
 }
 
 pub fn spawn(app: AppHandle, state: Arc<AppState>, events: Receiver<hotkey::Event>) {
+    // Kept so a timer can publish a status change after the call that
+    // started it has returned. Set once, at startup.
+    let _ = APP_STATE.set(Arc::clone(&state));
+
     let (dictation_tx, dictation_rx) = std::sync::mpsc::channel::<DictationJob>();
     let (note_tx, note_rx) = std::sync::mpsc::channel::<NoteJob>();
 
