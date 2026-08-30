@@ -13,6 +13,9 @@ use anyhow::{anyhow, Result};
 use base64::Engine;
 use serde_json::{json, Value};
 
+/// Attempts allowed for one transcription, running concurrently.
+const MAX_ATTEMPTS: usize = 3;
+
 const ENDPOINT: &str = "https://generativelanguage.googleapis.com/v1beta/interactions";
 
 pub struct BatchClient {
@@ -40,6 +43,15 @@ impl BatchClient {
 ///
 /// Do NOT set http1_only(): this endpoint requires HTTP/2 and every request
 /// fails outright with a transport error.
+    /// How long to wait for an attempt before starting another beside it.
+    ///
+    /// Comfortably past what a healthy request takes, so a normal
+    /// transcription never triggers a second one and never costs extra.
+    fn hedge_after(wav_bytes: usize) -> Duration {
+        let megabytes = wav_bytes as u64 / (1024 * 1024);
+        Duration::from_secs(7 + megabytes * 5)
+    }
+
     /// How long one attempt may take, given how much audio it carries.
     ///
     /// This used to be a flat sixty seconds, far longer than any healthy
@@ -152,49 +164,108 @@ impl BatchClient {
         // costs a moment rather than the whole dictation. HTTP error statuses
         // are NOT retried -- those the server did answer, and repeating them
         // just bills twice.
-        // Three attempts rather than two, each with its own client and its
-        // own connection. Safe to repeat because a request that never
-        // returned was never processed; an HTTP error status is a different
-        // matter and is not retried here, since the server did answer and
-        // asking again just bills twice.
-        let mut response = None;
-        let mut last = String::new();
+        // Overlapping attempts, not sequential ones.
+        //
+        // Measured on 29 August against the real service, from a standalone
+        // program with no part of this app involved: the same request either
+        // answers in about three seconds or does not answer at all. Eight
+        // real transcription requests produced one success; the failures did
+        // not return slowly, they returned nothing until the timeout expired.
+        // A second, independent HTTP library showed the same thing.
+        //
+        // So waiting for a stalled attempt to fail before starting another is
+        // pure loss. A fresh attempt begun alongside it usually answers in
+        // seconds. If the first one has not spoken shortly after a healthy
+        // request would have finished, another starts beside it, and the first
+        // usable answer wins.
+        //
+        // This bills for every attempt that reaches the service, so a stall
+        // can cost two or three times a normal request. At a few dictations a
+        // day that is worth far more than the minute it saves.
+        let api_key = std::sync::Arc::new(api_key.to_string());
+        let body = std::sync::Arc::new(body);
+        let wav_bytes = wav.len();
 
-        for attempt in 1..=3 {
-            let started = std::time::Instant::now();
-            match Self::send_once(api_key, &body, wav.len()) {
-                Ok(r) => {
-                    crate::logln!(
-                        "[batch] attempt {attempt} answered in {} ms",
-                        started.elapsed().as_millis()
-                    );
-                    response = Some(r);
-                    break;
+        let (tx, rx) = std::sync::mpsc::channel::<(usize, Result<String, String>)>();
+
+        let launch = |n: usize| {
+            let api_key = std::sync::Arc::clone(&api_key);
+            let body = std::sync::Arc::clone(&body);
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let started = std::time::Instant::now();
+                let outcome = Self::attempt(&api_key, &body, wav_bytes);
+                crate::logln!(
+                    "[batch] attempt {n} {} after {} ms",
+                    if outcome.is_ok() { "answered" } else { "failed" },
+                    started.elapsed().as_millis()
+                );
+                let _ = tx.send((n, outcome));
+            });
+        };
+
+        let hedge = Self::hedge_after(wav_bytes);
+        let mut launched = 1usize;
+        let mut finished = 0usize;
+        let mut last = String::from("no attempt completed");
+        launch(1);
+
+        loop {
+            match rx.recv_timeout(hedge) {
+                Ok((_, Ok(text))) => return Ok(text),
+                Ok((n, Err(e))) => {
+                    finished += 1;
+                    last = e;
+                    // A definite refusal from the server will refuse the other
+                    // attempts too; only a silent one is worth outrunning.
+                    if last.starts_with("HTTP ") {
+                        return Err(anyhow!("transcription failed ({last})"));
+                    }
+                    if finished >= MAX_ATTEMPTS {
+                        break;
+                    }
+                    if launched < MAX_ATTEMPTS {
+                        launched += 1;
+                        crate::logln!("[batch] attempt {n} failed; starting attempt {launched}");
+                        launch(launched);
+                    }
                 }
-                Err(e) => {
-                    last = e.to_string();
-                    crate::logln!(
-                        "[batch] attempt {attempt} gave up after {} ms ({last})",
-                        started.elapsed().as_millis()
-                    );
-                    std::thread::sleep(Duration::from_millis(400));
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if launched < MAX_ATTEMPTS {
+                        launched += 1;
+                        crate::logln!(
+                            "[batch] nothing back in {}s; starting attempt {launched} alongside",
+                            hedge.as_secs()
+                        );
+                        launch(launched);
+                    } else if finished >= MAX_ATTEMPTS {
+                        break;
+                    }
                 }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
 
-        let response = response.ok_or_else(|| {
-            anyhow!("could not reach the transcription service: {last}")
-        })?;
+        Err(anyhow!("could not reach the transcription service: {last}"))
+    }
+
+    /// One request, start to finish.
+    ///
+    /// Returns the transcript, or a description of what went wrong. An HTTP
+    /// status is prefixed "HTTP " so the caller can tell a refusal it should
+    /// respect from silence it should race.
+    fn attempt(api_key: &str, body: &Value, wav_bytes: usize) -> Result<String, String> {
+        let response = Self::send_once(api_key, body, wav_bytes).map_err(|e| e.to_string())?;
 
         let status = response.status();
-        let text = response.text()?;
+        let text = response.text().map_err(|e| e.to_string())?;
 
         if !status.is_success() {
-            return Err(anyhow!("transcription failed (HTTP {status}): {text}"));
+            return Err(format!("HTTP {status}: {text}"));
         }
 
-        let value: Value = serde_json::from_str(&text)
-            .map_err(|e| anyhow!("response was not JSON ({e}): {text}"))?;
+        let value: Value =
+            serde_json::from_str(&text).map_err(|e| format!("response was not JSON ({e})"))?;
 
         // Empty is legitimate: audio with no speech returns no `steps` key at
         // all rather than an empty transcript.

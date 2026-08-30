@@ -430,6 +430,41 @@ rather than recollection.
   "we sent it something unintelligible" -- and the reason it stays opt-in is
   that it puts every dictated word on disk as a WAV.
 
+## The transcription stalls are the service, not us (29 August 2026)
+
+Chased through four rounds of wrong guesses. Most of the value here is in what
+it turned out *not* to be.
+
+Ruled out by measurement:
+
+- **The network.** Plain requests to the host: 75 ms, five in a row.
+- **The endpoint and the upload size.** Three 400 KB POSTs to the exact URL,
+  thirty seconds apart: 617, 580, 593 ms.
+- **Our HTTP settings.** Same library, same configuration, same payload size,
+  without a key: about 230 ms every time. Without a key the server never
+  reaches transcription, which is why this test looked clean for so long and
+  why it was misleading.
+- **HTTP/2.** Every response comes back HTTP/1.1; reqwest is built here
+  without its http2 feature and never negotiated it. An earlier fix justified
+  by shared HTTP/2 connections was reasoning from a false premise.
+- **GeminiFlow itself.** A sixty-line standalone program reproduces it.
+
+What is actually happening: **a real transcription request either answers in
+about three seconds or does not answer at all.** Eight real requests through
+reqwest produced one success, and the failures returned nothing until their
+timeout rather than returning slowly. A second, unrelated HTTP library stalled
+too, though less often — 2 of 3 succeeded — which is a hint worth more samples
+but not worth acting on yet.
+
+The failure has no slow middle. That shape is what makes hedging right and
+retrying wrong: a stalled attempt will not improve, and waiting for it to
+expire before starting another is pure loss. Attempts now overlap, the first
+usable answer wins, up to three. Each attempt that reaches the service is
+billed.
+
+**This is very likely the intermittent dictation as well.** When live
+streaming fails, dictation falls back to exactly this path.
+
 ## Deferred ideas
 
 - Auto-populate vocabulary by scanning the active repo for identifiers.
