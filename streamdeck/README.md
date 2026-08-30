@@ -17,12 +17,16 @@ setting is on.
 
 ## Installing
 
-Copy the plugin folder into Stream Deck's plugin directory, then restart the
-Stream Deck app:
+Copy the contents of the plugin folder into Stream Deck's plugin directory,
+then restart the Stream Deck app. The same command works for a first install
+and for every update afterwards:
 
+```powershell
+Copy-Item -Recurse -Force "C:\Coding\GeminiFlow_v2\streamdeck\com.geminiflow.control.sdPlugin\*" "$env:APPDATA\Elgato\StreamDeck\Plugins\com.geminiflow.control.sdPlugin\"
 ```
-%APPDATA%\Elgato\StreamDeck\Plugins\com.geminiflow.control.sdPlugin
-```
+
+The trailing `\*` matters. Without it the command copies the folder *into*
+itself on the second run and fails, because the destination already exists.
 
 `node_modules` has to come with it — the plugin uses one library to talk to
 Stream Deck, and there is no build step that would bundle it in.
