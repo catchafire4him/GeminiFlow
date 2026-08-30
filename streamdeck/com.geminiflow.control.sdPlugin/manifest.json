@@ -1,6 +1,6 @@
 {
   "Name": "GeminiFlow",
-  "Version": "0.1.0.0",
+  "Version": "0.2.0.0",
   "Author": "GeminiFlow",
   "URL": "https://github.com/catchafire4him/GeminiFlow",
   "Description": "Start dictation, notes and calls in GeminiFlow, with buttons that show what the app is actually doing.",
@@ -25,17 +25,44 @@
   ],
   "Actions": [
     {
+      "Name": "Dictate",
+      "UUID": "com.geminiflow.control.dictate",
+      "Icon": "imgs/dictate",
+      "Tooltip": "Press once to start dictating, again to stop. The text lands wherever your cursor is.",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/dictate", "TitleAlignment": "bottom" }]
+    },
+    {
       "Name": "Note",
       "UUID": "com.geminiflow.control.note",
       "Icon": "imgs/note",
       "Tooltip": "Press once to start a note, again to stop. Lights up while recording.",
       "Controllers": ["Keypad"],
-      "States": [
-        {
-          "Image": "imgs/note",
-          "TitleAlignment": "bottom"
+      "States": [{ "Image": "imgs/note", "TitleAlignment": "bottom" }]
+    },
+    {
+      "Name": "Call",
+      "UUID": "com.geminiflow.control.call",
+      "Icon": "imgs/call",
+      "Tooltip": "Press once to start capturing a phone call, again to stop.",
+      "Controllers": ["Keypad"],
+      "States": [{ "Image": "imgs/call", "TitleAlignment": "bottom" }]
+    },
+    {
+      "Name": "Status",
+      "UUID": "com.geminiflow.control.status",
+      "Icon": "imgs/plugin",
+      "Tooltip": "Shows what GeminiFlow is doing. Turn the dial for microphone level, tap to start a note.",
+      "Controllers": ["Encoder"],
+      "Encoder": {
+        "layout": "layouts/strip.json",
+        "TriggerDescription": {
+          "Rotate": "Microphone level",
+          "Push": "Start or stop a note",
+          "Touch": "Start or stop a note"
         }
-      ]
+      },
+      "States": [{ "Image": "imgs/plugin" }]
     }
   ]
 }

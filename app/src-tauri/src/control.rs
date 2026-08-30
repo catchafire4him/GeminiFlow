@@ -173,6 +173,48 @@ fn handle(mut stream: TcpStream, state: &Arc<AppState>, token: &str) -> Result<(
 
         ("GET", "/events") => stream_events(stream, state),
 
+        // The microphone's own level, so a dial can drive the same setting
+        // the Settings slider does rather than a second one beside it.
+        ("GET", "/mic") => {
+            let device = input_device(state);
+            let volume = crate::mic::volume(device.as_deref()).unwrap_or(-1);
+            let muted = crate::mic::is_muted(device.as_deref()).unwrap_or(false);
+            respond(
+                &mut stream,
+                200,
+                "application/json",
+                &json!({ "volume": volume, "muted": muted }).to_string(),
+            )
+        }
+
+        ("POST", p) if p.starts_with("/mic/volume/") => {
+            match p.trim_start_matches("/mic/volume/").parse::<i64>() {
+                Ok(level) => {
+                    let device = input_device(state);
+                    match crate::mic::set_volume(device.as_deref(), level) {
+                        Ok(()) => respond(
+                            &mut stream,
+                            200,
+                            "application/json",
+                            &json!({ "volume": level.clamp(0, 100) }).to_string(),
+                        ),
+                        Err(e) => respond(
+                            &mut stream,
+                            400,
+                            "application/json",
+                            &json!({ "error": e.to_string() }).to_string(),
+                        ),
+                    }
+                }
+                Err(_) => respond(
+                    &mut stream,
+                    400,
+                    "application/json",
+                    r#"{"error":"level must be a whole number"}"#,
+                ),
+            }
+        }
+
         ("POST", p) if p.starts_with("/action/") => {
             let action = p.trim_start_matches("/action/");
             match run_action(action) {
@@ -229,6 +271,15 @@ fn stream_events(mut stream: TcpStream, state: &Arc<AppState>) -> Result<()> {
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
     }
+}
+
+/// The microphone Settings names, if it names one.
+fn input_device(state: &Arc<AppState>) -> Option<String> {
+    state
+        .settings
+        .lock()
+        .ok()
+        .and_then(|s| s.input_device.clone())
 }
 
 fn run_action(action: &str) -> Result<()> {

@@ -33,26 +33,48 @@ Stream Deck, and there is no build step that would bundle it in.
 
 Then drag **GeminiFlow → Note** onto a key.
 
-## What the button does
+## What you get
 
-Press it once to start a note, again to stop. Same behaviour as the keyboard
-shortcut, because it goes through the same path inside the app rather than a
-parallel one.
+Four things to drag onto the deck.
 
-The picture changes with the app's real state:
+**Dictate**, **Note** and **Call** are keys. Press once to start, again to
+stop. They behave exactly like the keyboard shortcuts because they go through
+the same path inside the app rather than a parallel one — a dictation started
+from the deck is the same session as one started with Right Ctrl.
+
+Dictation is the exception worth knowing about: at the keyboard it is
+hold-to-talk, which a button press cannot express. The button sends the start
+and the stop itself, deciding which one is next from what the app says it is
+doing. So it is a two-press button here and a hold-to-talk key there, and both
+drive the same recording.
+
+**Status** goes on the touch strip of a Stream Deck +. It shows what the app
+is doing, how long the current recording has run, and the microphone level
+along the bottom. Turn its dial to change the microphone level — the same
+setting the slider in Settings changes, not a second one beside it. Push the
+dial or tap the strip to start or stop a note.
+
+The strip takes one quarter of the display. A plugin cannot span the whole
+thing; each quarter belongs to one dial.
+
+## What the pictures mean
 
 | Look | Meaning |
 | --- | --- |
 | Grey, "offline" | GeminiFlow is not running, or external control is off |
-| Grey, "Note" | Idle and ready |
-| Red, "REC" | Recording a note |
-| Purple, "CALL" | Recording a call |
-| Amber, "…" | Working on it — transcribing or summarising |
-| Red, "!" | Something failed; the app has the detail |
+| Grey glyph | Idle and ready |
+| Red, pulsing | Recording |
+| Purple, pulsing | Recording a call |
+| Amber dots | Transcribing or summarising |
+| Red exclamation | Something failed; the app has the detail |
+
+Each key only reacts to its own work. Recording a note does not light up the
+dictation key — a button that lights up for something it did not start is
+worse than one that stays dark.
 
 The app going away is ordinary, not an error: the plugin keeps trying to
 reconnect, backing off to once every thirty seconds, and shows "offline"
-meanwhile. Start GeminiFlow and the button catches up on its own.
+meanwhile. Start GeminiFlow and everything catches up on its own.
 
 ## If it does not work
 
@@ -78,9 +100,10 @@ runs while something is actually moving, so an idle button costs nothing.
 
 ## Status
 
-The half that talks to GeminiFlow is tested and working. The half that talks
-to Stream Deck is written but has not been run yet — that needs the plugin
-actually loaded.
+Working and in use: the control link, all three keys, the state-driven
+pictures, and the frame-by-frame animation. The microphone endpoints are
+verified against the running app — read 80, set 70, read back 70.
 
-Only the note button exists so far. Dictation, calls, the touch strip and the
-dial come next, once this proves out.
+The touch strip and dial are written but unproven; they need a Stream Deck +
+in front of them. If the strip stays blank, the custom layout in
+`layouts/strip.json` is the first thing to suspect.
