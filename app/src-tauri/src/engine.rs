@@ -1095,6 +1095,9 @@ fn process_dictation(
     // running guess, so a transcript that arrives that way keeps the filler
     // words smart mode would have removed.
     let mut source = "none";
+    // True when the stream never sent a finished transcript and all we hold
+    // is the hypothesis that was being shown while the user spoke.
+    let mut only_a_guess = false;
     // Time spent obtaining the text, on whichever path won. Not the same as
     // the latency the user feels, which also covers injection.
     let mut transcribe_ms: i64 = 0;
@@ -1108,6 +1111,7 @@ fn process_dictation(
                     if result.from_partial { " (from interim)" } else { "" }
                 );
                 source = if result.from_partial { "live-interim" } else { "live-final" };
+                only_a_guess = result.from_partial;
                 transcribe_ms = result.finalize_ms as i64;
                 text = result.transcript;
             }
@@ -1115,32 +1119,56 @@ fn process_dictation(
         }
     }
 
-    // A live result can come back non-empty but absurdly short -- measured:
-    // 11.2s of speech returning 5 characters of interim text, which then got
-    // pasted. Empty is not the only failure. Ordinary speech runs 10-15
-    // characters per second. Under ~8/s means we likely kept only a later
-    // fragment (a 48s hold that pasted 303 chars was ~6/s) and batch should
-    // redo it. Complete live takes here land at 10+.
-    const MIN_LIVE_CHARS_PER_SEC: f32 = 8.0;
+    // Whether to trust what the stream gave us.
+    //
+    // Judged by where the text came from, not by how much of it there is.
+    // Density was the obvious measure and it does not work: truncation takes
+    // the tail, and losing the last few words barely moves the ratio.
+    // Measured over 306 real dictations, a threshold of 8 characters per
+    // second caught one of the four visibly cut-off transcripts while
+    // wrongly condemning six complete ones -- "Go ahead." spoken slowly is
+    // 6.2 a second and perfectly finished.
+    //
+    // The reliable signal is simply whether a final ever arrived. An interim
+    // is the running hypothesis: it is *defined* as what had been guessed so
+    // far, so its tail is missing whenever the stream stopped early. Four of
+    // the seven pasted this way ended mid-phrase. One of two hundred and
+    // ninety proper finals did.
     let seconds = samples.len() as f32 / audio::TARGET_RATE as f32;
-    let chars = text.trim().len() as f32;
-    let density = if seconds > 0.0 { chars / seconds } else { 0.0 };
-    let suspiciously_short = !text.trim().is_empty() && density < MIN_LIVE_CHARS_PER_SEC;
+    let density = if seconds > 0.0 {
+        text.trim().len() as f32 / seconds
+    } else {
+        0.0
+    };
 
     if live_attempted && !text.trim().is_empty() {
         crate::logln!(
-            "[engine] live density {density:.1} chars/s ({} chars, {seconds:.1}s, {source})",
+            "[engine] live gave {} chars for {seconds:.1}s ({density:.1}/s, {source})",
             text.trim().len()
         );
     }
 
-    if suspiciously_short {
+    // A final still has to clear a floor. Measured: 11.2 seconds of speech
+    // returning five characters, which then got pasted. That is broken
+    // rather than terse, and no real dictation here comes close to it -- the
+    // sparsest complete one is 4.7 a second.
+    const ABSURDLY_SPARSE: f32 = 2.0;
+    let distrust = !text.trim().is_empty() && (only_a_guess || density < ABSURDLY_SPARSE);
+
+    // Kept, rather than dropped, so a failed re-transcription can still fall
+    // back to it. Partial text beats losing the dictation entirely.
+    let mut held_guess = String::new();
+
+    if distrust {
         crate::logln!(
-            "[engine] live returned {} chars for {seconds:.1}s of audio -- too little \
-             to trust, falling back to batch",
-            text.trim().len()
+            "[engine] {} -- re-transcribing the audio properly",
+            if only_a_guess {
+                "the stream never finished, so this is only the running guess"
+            } else {
+                "far too little text for the length of the recording"
+            }
         );
-        text.clear();
+        held_guess = std::mem::take(&mut text);
         source = "none";
     }
 
@@ -1180,6 +1208,17 @@ fn process_dictation(
             text.trim().len(),
             batch_started.elapsed().as_millis()
         );
+    }
+
+    // Re-transcribing found nothing, but we were holding something. Better a
+    // transcript missing its tail than none at all.
+    if text.trim().is_empty() && !held_guess.trim().is_empty() {
+        crate::logln!(
+            "[engine] re-transcribing produced nothing; using the {} chars we held",
+            held_guess.trim().len()
+        );
+        text = held_guess;
+        source = "live-interim";
     }
 
     if text.trim().is_empty() {
