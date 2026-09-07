@@ -16,10 +16,13 @@ use tokio_tungstenite::tungstenite::Message;
 const WS_HOST: &str = "wss://generativelanguage.googleapis.com/ws/\
                        google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
-/// How long to wait for a final before falling back to the last interim
-/// hypothesis. Successful finalisation is consistently under a second, so a
-/// long wait here buys nothing and just makes a failure feel broken.
-const FINALIZE_TIMEOUT: Duration = Duration::from_millis(3500);
+/// How long to wait after the last transcript frame before giving up on a
+/// final. Successful finalisation is consistently under a second; a long
+/// utterance that is still emitting interims keeps this timer pushed forward.
+const FINALIZE_IDLE: Duration = Duration::from_millis(3500);
+
+/// Hard ceiling after `activityEnd`, so a silent socket cannot stall the key.
+const FINALIZE_CAP: Duration = Duration::from_secs(12);
 
 /// How long to keep listening after a final arrives, in case more follow.
 ///
@@ -39,7 +42,7 @@ pub enum LiveMsg {
 #[derive(Debug, Default)]
 pub struct LiveResult {
     pub transcript: String,
-    /// Milliseconds from audioStreamEnd to the final transcript.
+    /// Milliseconds from activityEnd to the final transcript.
     pub finalize_ms: u128,
     /// True when no final arrived and the interim hypothesis was used, which
     /// is slightly less accurate than a proper final.
@@ -148,6 +151,10 @@ async fn session(
     let mut end_sent: Option<Instant> = None;
     // When the most recent final arrived, once the release edge has passed.
     let mut last_final_at: Option<Instant> = None;
+    // Last interim or final after release. The idle timer is measured from
+    // this, not from activityEnd, so a still-streaming long utterance is
+    // not cut off by a wall clock started at the key-up.
+    let mut last_rx_at: Option<Instant> = None;
 
     // Everything below exists so one summary line per session can say what
     // happened. Before this, a session that worked perfectly logged nothing
@@ -184,11 +191,15 @@ async fn session(
     let mut pending_audio: Vec<Vec<i16>> = Vec::new();
 
     loop {
-        // Once a final has arrived the wait shortens to the grace window;
-        // until then the full finalisation timeout applies.
-        let deadline = match (end_sent, last_final_at) {
-            (Some(_), Some(seen)) => Some(seen + FINAL_GRACE),
-            (Some(sent), None) => Some(sent + FINALIZE_TIMEOUT),
+        let deadline = match (end_sent, last_final_at, last_rx_at) {
+            (Some(sent), Some(_), rx) => {
+                let from = rx.unwrap_or(sent);
+                Some(min_instant(from + FINAL_GRACE, sent + FINALIZE_CAP))
+            }
+            (Some(sent), None, rx) => {
+                let from = rx.unwrap_or(sent);
+                Some(min_instant(from + FINALIZE_IDLE, sent + FINALIZE_CAP))
+            }
             _ => None,
         };
 
@@ -266,10 +277,13 @@ async fn session(
                     .pointer("/serverContent/interimInputTranscription/text")
                     .and_then(Value::as_str)
                 {
-                    if !partial.trim().is_empty() {
-                        last_partial = partial.to_string();
+                    apply_interim(&mut banked_interim, &mut last_partial, partial);
+                    if end_sent.is_some() {
+                        last_rx_at = Some(Instant::now());
                     }
-                    on_partial(partial.to_string());
+                    // Overlay should match what we will paste, not only the
+                    // latest fragment after a silent hypothesis reset.
+                    on_partial(assembled_interim(&banked_interim, &last_partial));
                 }
 
                 if let Some(final_text) = value
@@ -286,6 +300,7 @@ async fn session(
                         finals_after_end += 1;
                         result.finalize_ms = sent.elapsed().as_millis();
                         last_final_at = Some(Instant::now());
+                        last_rx_at = last_final_at;
                     } else {
                         finals_before_end += 1;
                     }
@@ -346,20 +361,16 @@ async fn session(
                             );
                         }
                         end_sent = Some(Instant::now());
-                        // activityEnd closes the turn opened at setup;
-                        // audioStreamEnd then says no more audio is coming.
-                        // Both, in that order.
+                        // Manual VAD: activityEnd is the turn boundary.
+                        // audioStreamEnd is for automatic VAD and must not be
+                        // sent here -- mixing the two left long sessions with
+                        // interims but no final.
                         write
                             .send(Message::Text(
                                 json!({ "realtimeInput": { "activityEnd": {} } }).to_string(),
                             ))
                             .await?;
-                        write
-                            .send(Message::Text(
-                                json!({ "realtimeInput": { "audioStreamEnd": true } })
-                                    .to_string(),
-                            ))
-                            .await?;
+                        crate::logln!("[live] -> activityEnd after {chunks_sent} chunks");
                     }
                     None => {
                         ended = "audio channel closed";
@@ -376,13 +387,24 @@ async fn session(
                     ended = "grace window";
                     break;
                 }
-                ended = "finalize timeout";
+                let hit_cap = end_sent
+                    .map(|sent| sent.elapsed() >= FINALIZE_CAP)
+                    .unwrap_or(false);
+                ended = if hit_cap {
+                    "finalize cap"
+                } else {
+                    "finalize timeout"
+                };
                 crate::logln!(
                     "[live] no closing signal within {}s ({chunks_sent} chunks sent, \
                      {} chars finalised, {} chars interim)",
-                    FINALIZE_TIMEOUT.as_secs(),
+                    if hit_cap {
+                        FINALIZE_CAP.as_secs()
+                    } else {
+                        FINALIZE_IDLE.as_secs()
+                    },
                     result.transcript.trim().len(),
-                    last_partial.trim().len()
+                    assembled_interim(&banked_interim, &last_partial).len()
                 );
                 if let Some(sent) = end_sent {
                     result.finalize_ms = sent.elapsed().as_millis();
@@ -398,9 +420,7 @@ async fn session(
     // Fall back to the interim hypothesis, banked segments included. The user
     // watched this text appear live, so reporting "no transcript" while
     // holding it would be both wrong and baffling.
-    let mut interim = banked_interim.clone();
-    append_segment(&mut interim, &last_partial);
-    let interim = interim.trim().to_string();
+    let interim = assembled_interim(&banked_interim, &last_partial);
 
     if result.transcript.is_empty() && !interim.is_empty() {
         crate::logln!(
@@ -442,6 +462,49 @@ async fn session(
     Ok(result)
 }
 
+/// Joins banked completed segments with the current hypothesis.
+fn assembled_interim(banked: &str, current: &str) -> String {
+    let mut out = banked.to_string();
+    append_segment(&mut out, current);
+    out.trim().to_string()
+}
+
+/// Updates the running interim when a new hypothesis arrives.
+///
+/// Interims are a single running string per turn. The server can start a new
+/// one without sending turnComplete, which used to overwrite everything
+/// spoken before that point. A shrink that is not a prefix/suffix of the
+/// previous hypothesis is treated as that silent reset.
+fn apply_interim(banked: &mut String, current: &mut String, incoming: &str) {
+    let incoming = incoming.trim();
+    if incoming.is_empty() {
+        return;
+    }
+
+    if current.trim().is_empty() {
+        *current = incoming.to_string();
+        return;
+    }
+
+    let prev = current.trim();
+    if same_hypothesis(prev, incoming) {
+        if incoming.len() >= prev.len() {
+            *current = incoming.to_string();
+        }
+        return;
+    }
+
+    append_segment(banked, current);
+    *current = incoming.to_string();
+}
+
+fn same_hypothesis(prev: &str, incoming: &str) -> bool {
+    incoming.starts_with(prev)
+        || prev.starts_with(incoming)
+        || incoming.ends_with(prev)
+        || prev.ends_with(incoming)
+}
+
 /// Joins finalized segments into one transcript.
 ///
 /// Segments arrive already punctuated but without surrounding whitespace, so
@@ -469,6 +532,14 @@ fn append_segment(acc: &mut String, segment: &str) {
     acc.push_str(segment);
 }
 
+fn min_instant(a: Instant, b: Instant) -> Instant {
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
 fn audio_message(pcm: &[i16]) -> String {
     let mut bytes = Vec::with_capacity(pcm.len() * 2);
     for sample in pcm {
@@ -490,5 +561,45 @@ async fn sleep_until(deadline: Option<Instant>) {
     match deadline {
         Some(t) => tokio::time::sleep_until(tokio::time::Instant::from_std(t)).await,
         None => std::future::pending::<()>().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_interim_grows_the_same_hypothesis() {
+        let mut banked = String::new();
+        let mut current = String::new();
+        apply_interim(&mut banked, &mut current, "hello");
+        apply_interim(&mut banked, &mut current, "hello world");
+        assert_eq!(banked, "");
+        assert_eq!(current, "hello world");
+        assert_eq!(assembled_interim(&banked, &current), "hello world");
+    }
+
+    #[test]
+    fn apply_interim_banks_on_silent_reset() {
+        let mut banked = String::new();
+        let mut current = String::new();
+        apply_interim(&mut banked, &mut current, "first sentence about the logs");
+        apply_interim(&mut banked, &mut current, "and then a completely new stretch");
+        assert_eq!(banked, "first sentence about the logs");
+        assert_eq!(current, "and then a completely new stretch");
+        assert_eq!(
+            assembled_interim(&banked, &current),
+            "first sentence about the logs and then a completely new stretch"
+        );
+    }
+
+    #[test]
+    fn apply_interim_keeps_the_longer_shrink() {
+        let mut banked = String::new();
+        let mut current = String::new();
+        apply_interim(&mut banked, &mut current, "hello world this is long");
+        apply_interim(&mut banked, &mut current, "hello world");
+        assert_eq!(banked, "");
+        assert_eq!(current, "hello world this is long");
     }
 }

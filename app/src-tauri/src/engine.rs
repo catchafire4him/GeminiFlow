@@ -1037,7 +1037,7 @@ fn stop_dictation(
     set_state(app, state, State::Finalizing);
 
     // Stopping the recorder flushes the tail of the utterance to the tap, so
-    // it must happen before audioStreamEnd.
+    // it must happen before activityEnd.
     let samples = recorder.stop()?;
     let seconds = samples.len() as f32 / audio::TARGET_RATE as f32;
     let peak = audio::peak(&samples);
@@ -1118,11 +1118,21 @@ fn process_dictation(
     // A live result can come back non-empty but absurdly short -- measured:
     // 11.2s of speech returning 5 characters of interim text, which then got
     // pasted. Empty is not the only failure. Ordinary speech runs 10-15
-    // characters per second, so anything under 2/s means the stream dropped
-    // most of the audio and batch should redo it.
+    // characters per second. Under ~8/s means we likely kept only a later
+    // fragment (a 48s hold that pasted 303 chars was ~6/s) and batch should
+    // redo it. Complete live takes here land at 10+.
+    const MIN_LIVE_CHARS_PER_SEC: f32 = 8.0;
     let seconds = samples.len() as f32 / audio::TARGET_RATE as f32;
-    let suspiciously_short =
-        !text.trim().is_empty() && (text.trim().len() as f32) < seconds * 2.0;
+    let chars = text.trim().len() as f32;
+    let density = if seconds > 0.0 { chars / seconds } else { 0.0 };
+    let suspiciously_short = !text.trim().is_empty() && density < MIN_LIVE_CHARS_PER_SEC;
+
+    if live_attempted && !text.trim().is_empty() {
+        crate::logln!(
+            "[engine] live density {density:.1} chars/s ({} chars, {seconds:.1}s, {source})",
+            text.trim().len()
+        );
+    }
 
     if suspiciously_short {
         crate::logln!(
