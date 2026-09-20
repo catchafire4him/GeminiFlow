@@ -277,13 +277,13 @@ async fn session(
                     .pointer("/serverContent/interimInputTranscription/text")
                     .and_then(Value::as_str)
                 {
-                    apply_interim(&mut banked_interim, &mut last_partial, partial);
+                    apply_interim(&mut last_partial, partial);
                     if end_sent.is_some() {
                         last_rx_at = Some(Instant::now());
                     }
                     // Overlay should match what we will paste, not only the
                     // latest fragment after a silent hypothesis reset.
-                    on_partial(assembled_interim(&banked_interim, &last_partial));
+                    on_partial(last_partial.clone());
                 }
 
                 if let Some(final_text) = value
@@ -404,7 +404,7 @@ async fn session(
                         FINALIZE_IDLE.as_secs()
                     },
                     result.transcript.trim().len(),
-                    assembled_interim(&banked_interim, &last_partial).len()
+                    last_partial.trim().len()
                 );
                 if let Some(sent) = end_sent {
                     result.finalize_ms = sent.elapsed().as_millis();
@@ -420,7 +420,7 @@ async fn session(
     // Fall back to the interim hypothesis, banked segments included. The user
     // watched this text appear live, so reporting "no transcript" while
     // holding it would be both wrong and baffling.
-    let interim = assembled_interim(&banked_interim, &last_partial);
+    let interim = last_partial.trim().to_string();
 
     if result.transcript.is_empty() && !interim.is_empty() {
         crate::logln!(
@@ -429,14 +429,6 @@ async fn session(
         );
         result.transcript = interim;
         result.from_partial = true;
-    } else if !interim.is_empty() && interim.len() > result.transcript.len() * 2 {
-        // Finals covered far less than we heard, so turn boundaries ate
-        // segments. Worth seeing in the log if truncation is reported again.
-        crate::logln!(
-            "[live] WARNING finals gave {} chars but interim held {} -- possible truncation",
-            result.transcript.len(),
-            interim.len()
-        );
     }
 
     // One line per session, success or failure. Reading a run of these is
@@ -462,47 +454,30 @@ async fn session(
     Ok(result)
 }
 
-/// Joins banked completed segments with the current hypothesis.
-fn assembled_interim(banked: &str, current: &str) -> String {
-    let mut out = banked.to_string();
-    append_segment(&mut out, current);
-    out.trim().to_string()
-}
+
 
 /// Updates the running interim when a new hypothesis arrives.
 ///
-/// Interims are a single running string per turn. The server can start a new
-/// one without sending turnComplete, which used to overwrite everything
-/// spoken before that point. A shrink that is not a prefix/suffix of the
-/// previous hypothesis is treated as that silent reset.
-fn apply_interim(banked: &mut String, current: &mut String, incoming: &str) {
+/// The latest hypothesis simply wins.
+///
+/// This used to also bank the previous one whenever the new text was not a
+/// prefix or suffix of it, guarding against the server silently starting a
+/// fresh hypothesis mid-dictation. Two measurements retired that guard.
+///
+/// The case it protects against does not occur: across 555 sessions the
+/// server ended a turn early exactly zero times, which is what disabling
+/// its automatic speech detection buys. And the guard misfired constantly,
+/// because ordinary rewording is not a prefix or a suffix either -- banked
+/// interims ran at a median of 48 characters per second of audio, against
+/// 14 for the finals on the same recordings. Nobody speaks at 48.
+///
+/// If the server ever does start resetting hypotheses again, the early-turn
+/// count in the session summary is what will say so.
+fn apply_interim(current: &mut String, incoming: &str) {
     let incoming = incoming.trim();
-    if incoming.is_empty() {
-        return;
-    }
-
-    if current.trim().is_empty() {
+    if !incoming.is_empty() {
         *current = incoming.to_string();
-        return;
     }
-
-    let prev = current.trim();
-    if same_hypothesis(prev, incoming) {
-        if incoming.len() >= prev.len() {
-            *current = incoming.to_string();
-        }
-        return;
-    }
-
-    append_segment(banked, current);
-    *current = incoming.to_string();
-}
-
-fn same_hypothesis(prev: &str, incoming: &str) -> bool {
-    incoming.starts_with(prev)
-        || prev.starts_with(incoming)
-        || incoming.ends_with(prev)
-        || prev.ends_with(incoming)
 }
 
 /// Joins finalized segments into one transcript.
@@ -569,37 +544,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn apply_interim_grows_the_same_hypothesis() {
-        let mut banked = String::new();
+    fn apply_interim_takes_the_latest() {
         let mut current = String::new();
-        apply_interim(&mut banked, &mut current, "hello");
-        apply_interim(&mut banked, &mut current, "hello world");
-        assert_eq!(banked, "");
+        apply_interim(&mut current, "hello");
+        apply_interim(&mut current, "hello world");
         assert_eq!(current, "hello world");
-        assert_eq!(assembled_interim(&banked, &current), "hello world");
     }
 
     #[test]
-    fn apply_interim_banks_on_silent_reset() {
-        let mut banked = String::new();
+    fn apply_interim_accepts_rewording_without_growing() {
+        // The case that used to inflate the interim: a revision that is
+        // neither a prefix nor a suffix of what came before.
         let mut current = String::new();
-        apply_interim(&mut banked, &mut current, "first sentence about the logs");
-        apply_interim(&mut banked, &mut current, "and then a completely new stretch");
-        assert_eq!(banked, "first sentence about the logs");
-        assert_eq!(current, "and then a completely new stretch");
-        assert_eq!(
-            assembled_interim(&banked, &current),
-            "first sentence about the logs and then a completely new stretch"
-        );
+        apply_interim(&mut current, "i think we should invite alice");
+        apply_interim(&mut current, "I think we should invite Bob.");
+        assert_eq!(current, "I think we should invite Bob.");
     }
 
     #[test]
-    fn apply_interim_keeps_the_longer_shrink() {
-        let mut banked = String::new();
-        let mut current = String::new();
-        apply_interim(&mut banked, &mut current, "hello world this is long");
-        apply_interim(&mut banked, &mut current, "hello world");
-        assert_eq!(banked, "");
-        assert_eq!(current, "hello world this is long");
+    fn apply_interim_ignores_an_empty_frame() {
+        let mut current = String::from("hello world");
+        apply_interim(&mut current, "   ");
+        assert_eq!(current, "hello world");
     }
+
+
 }
