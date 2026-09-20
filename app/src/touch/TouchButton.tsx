@@ -33,6 +33,10 @@ export function TouchButton() {
     grabX: 0,
     grabY: 0,
     at: 0,
+    // Whether a finger or button is actually down. A mouse sends move
+    // events merely by passing over the button, so without this a latched
+    // button would pick itself up and follow the cursor around.
+    down: false,
     phase: "idle" as Phase,
     pending: null as { x: number; y: number } | null,
     frame: 0,
@@ -72,6 +76,7 @@ export function TouchButton() {
     g.grabX = e.clientX;
     g.grabY = e.clientY;
     g.at = Date.now();
+    g.down = true;
 
     if (g.phase === "latched") {
       // Stays latched for now: this press might be a drag rather than a stop,
@@ -85,7 +90,7 @@ export function TouchButton() {
 
   function onPointerMove(e: React.PointerEvent) {
     const g = gesture.current;
-    if (g.phase === "idle") return;
+    if (!g.down || g.phase === "idle") return;
 
     const dx = e.screenX - g.startX;
     const dy = e.screenY - g.startY;
@@ -126,6 +131,8 @@ export function TouchButton() {
 
   function onPointerUp(e: React.PointerEvent) {
     const g = gesture.current;
+    g.down = false;
+    (e.target as Element).releasePointerCapture?.(e.pointerId);
     const held = Date.now() - g.at;
     const moved = Math.hypot(e.screenX - g.startX, e.screenY - g.startY);
 
@@ -167,6 +174,7 @@ export function TouchButton() {
 
   function onPointerCancel() {
     const g = gesture.current;
+    g.down = false;
     // Windows can take a touch away mid-gesture. Whatever was happening, end
     // it rather than leave a recording nobody is holding.
     if (g.phase === "pressing") api.touchRelease().catch(() => {});
