@@ -9,13 +9,29 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 const root = ReactDOM.createRoot(document.getElementById("root")!);
 
 async function boot() {
-  if (getCurrentWindow().label === "overlay") {
+  const label = getCurrentWindow().label;
+
+  if (label === "overlay") {
     const { Overlay } = await import("./overlay/Overlay");
     root.render(
       <React.StrictMode>
         <Overlay />
       </React.StrictMode>
     );
+    return;
+  }
+
+  // The floating button and its dismiss target share a stylesheet, kept out
+  // of the main bundle for the same reason the overlay's is.
+  if (label === "touch" || label === "touchTarget") {
+    await import("./touch/touch.css");
+    if (label === "touch") {
+      const { TouchButton } = await import("./touch/TouchButton");
+      root.render(<TouchButton />);
+    } else {
+      const { TouchTarget } = await import("./touch/TouchTarget");
+      root.render(<TouchTarget />);
+    }
     return;
   }
 

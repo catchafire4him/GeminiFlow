@@ -684,6 +684,44 @@ export function SettingsView() {
         Manager and is not affected; remove it with the button at the top.
       </p>
 
+      <h2 style={{ marginTop: 26 }}>Touchscreen</h2>
+
+      <div className="field">
+        <label className="row" style={{ gap: 8 }}>
+          <input
+            type="checkbox"
+            checked={settings.touchButton}
+            style={{ width: "auto" }}
+            onChange={(e) => patch({ touchButton: e.target.checked })}
+          />
+          <span>Show a floating button to dictate with</span>
+        </label>
+        <p className="hint" style={{ marginTop: 6, marginBottom: 0 }}>
+          A round button that floats above everything else. Hold it to dictate,
+          exactly like the shortcut key, or tap it once to start and again to
+          stop — holding a finger against glass for a long dictation is no
+          fun. Drag it anywhere; drag it onto the circle near the bottom of the
+          screen to put it away. You can always bring it back from the tray
+          icon.
+        </p>
+
+        {settings.touchButton && (
+          <label className="row" style={{ gap: 8, marginTop: 12 }}>
+            <span className="muted">Size</span>
+            <select
+              value={settings.touchSize}
+              style={{ width: "auto" }}
+              onChange={(e) => patch({ touchSize: Number(e.target.value) })}
+            >
+              <option value={64}>Small</option>
+              <option value={88}>Thumb-sized</option>
+              <option value={112}>Large</option>
+            </select>
+            <span className="muted">takes effect when the app restarts</span>
+          </label>
+        )}
+      </div>
+
       <h2 style={{ marginTop: 26 }}>External control</h2>
 
       <div className="field">

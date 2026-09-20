@@ -394,6 +394,18 @@ pub fn spawn(app: AppHandle, state: Arc<AppState>, events: Receiver<hotkey::Even
                     }
                 }
 
+                hotkey::Event::Cancel => {
+                    let Some(started) = session.take() else {
+                        continue;
+                    };
+                    crate::logln!("[engine] dictation cancelled");
+                    started.active.store(false, Ordering::SeqCst);
+                    // Stopped and dropped. The samples go nowhere: nothing
+                    // is transcribed, nothing is pasted, nothing is stored.
+                    let _ = recorder.stop();
+                    set_state(&app, &state, State::Idle);
+                }
+
                 hotkey::Event::Release => {
                     let Some(started) = session.take() else {
                         crate::logln!("[engine] release ignored: no session was open");

@@ -81,6 +81,8 @@ export interface Settings {
   speakerphone: boolean;
   prebufferEnabled: boolean;
   prebufferSeconds: number;
+  touchButton: boolean;
+  touchSize: number;
   controlEnabled: boolean;
   controlPort: number;
   keepDictationAudio: boolean;
@@ -140,6 +142,19 @@ export const api = {
   orphanedAudio: () => invoke<OrphanInfo>("orphaned_audio"),
   noteAudio: (id: number) => invoke<string>("note_audio", { id }),
   readLog: (lines: number) => invoke<string>("read_log", { lines }),
+
+  // The floating touch button. Press, release and cancel go through the
+  // same channel the keyboard hook uses, so a dictation started by touch is
+  // the same session as one started with the shortcut.
+  touchPress: () => invoke<void>("touch_press"),
+  touchRelease: () => invoke<void>("touch_release"),
+  touchCancel: () => invoke<void>("touch_cancel"),
+  /// Returns whether the button is now over the dismiss target.
+  touchMove: (x: number, y: number) => invoke<boolean>("touch_move", { x, y }),
+  touchDragging: (dragging: boolean) => invoke<void>("touch_dragging", { dragging }),
+  touchSettle: () => invoke<void>("touch_settle"),
+  touchDismiss: () => invoke<void>("touch_dismiss"),
+  status: () => invoke<StatusEvent>("get_state"),
   testSound: () => invoke<void>("test_sound"),
   micLevel: () => invoke<MicLevel>("mic_level"),
   setMicLevel: (percent: number) => invoke<void>("set_mic_level", { percent }),

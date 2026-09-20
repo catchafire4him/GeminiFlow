@@ -1,0 +1,164 @@
+/* The floating button and its dismiss target.
+ *
+ * Both windows are transparent, so everything here is drawn against nothing
+ * and the page itself must not paint a background. Loaded only by those two
+ * windows -- the !important below would strip the main window's background if
+ * it were ever bundled alongside it. */
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+  /* Windows would otherwise offer to pan or zoom the page instead of giving
+     us the touch. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.touch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(28, 31, 36, 0.82);
+  box-shadow:
+    0 6px 20px rgba(0, 0, 0, 0.45),
+    inset 0 0 0 1.5px rgba(255, 255, 255, 0.1);
+  color: #c8ced6;
+  cursor: pointer;
+  /* Dimmed at rest so it sits quietly over whatever is underneath, and full
+     strength the moment it is doing something. */
+  opacity: 0.62;
+  transition:
+    opacity 140ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    transform 120ms ease;
+}
+
+.touch:hover,
+.touch.recording,
+.touch.working,
+.touch.failed,
+.touch.dragging {
+  opacity: 1;
+}
+
+.touch svg {
+  width: 44%;
+  height: 44%;
+  fill: currentColor;
+  pointer-events: none;
+}
+
+.touch.recording {
+  background: rgba(70, 26, 28, 0.94);
+  color: #ff9ea1;
+}
+
+.touch.working {
+  background: rgba(54, 42, 24, 0.94);
+  color: #ffd479;
+}
+
+.touch.failed {
+  background: rgba(70, 26, 28, 0.94);
+  color: #ff9ea1;
+}
+
+.touch.dragging {
+  transform: scale(1.06);
+}
+
+/* Over the dismiss target: says what letting go would do. */
+.touch.doomed {
+  background: rgba(70, 26, 28, 0.96);
+  color: #ff9ea1;
+  transform: scale(0.88);
+}
+
+/* The ring that travels outward while recording. Drawn here rather than in
+   the button's own background so it can overflow the circle. */
+.ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2.5px solid currentColor;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.touch.recording .ring {
+  animation: pulse 1.6s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  100% {
+    transform: scale(1.5);
+    opacity: 0;
+  }
+}
+
+/* A small mark that distinguishes "recording because you are holding it" from
+   "recording because you tapped it and walked away". The second needs another
+   tap, and nothing else on the button would say so. */
+.latch {
+  position: absolute;
+  top: 12%;
+  right: 12%;
+  width: 11%;
+  height: 11%;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* ------------------------------------------------------------ the target */
+
+.target {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  color: #ff9ea1;
+  background: radial-gradient(
+    circle at center,
+    rgba(70, 26, 28, 0.9) 0%,
+    rgba(70, 26, 28, 0.72) 58%,
+    rgba(70, 26, 28, 0) 70%
+  );
+  animation: rise 160ms ease-out;
+}
+
+.target svg {
+  width: 30%;
+  height: 30%;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  fill: none;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

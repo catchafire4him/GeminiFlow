@@ -27,6 +27,12 @@ pub enum Event {
     Press,
     /// Dictation key released.
     Release,
+    /// Abandon the dictation in progress without transcribing it.
+    ///
+    /// A held key has no way to say this -- you either let go or you do
+    /// not -- but a touch does: sliding a finger off to drag the button
+    /// somewhere means the press was never meant to be speech.
+    Cancel,
     /// Notes chord tapped. A toggle, because nobody holds a key for a
     /// ten-minute note.
     NotesToggle,
@@ -452,6 +458,10 @@ pub fn request_press() {
 
 pub fn request_release() {
     emit(Event::Release);
+}
+
+pub fn request_cancel() {
+    emit(Event::Cancel);
 }
 
 pub fn request_notes_toggle() {

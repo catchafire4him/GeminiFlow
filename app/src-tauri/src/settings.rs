@@ -56,6 +56,25 @@ pub struct Settings {
     /// 0-100. 50 is the level the tones were tuned at.
     #[serde(default = "default_sound_volume")]
     pub sound_volume: i64,
+    /// A floating button that can be held to dictate, for touchscreens.
+    ///
+    /// Off by default: it is a permanent thing on the screen, and on a
+    /// machine without a touchscreen it is only in the way.
+    #[serde(default)]
+    pub touch_button: bool,
+    /// Where it was last left, in logical screen pixels. Clamped back
+    /// into view at startup, since the screen it was saved on may be gone.
+    #[serde(default)]
+    pub touch_x: f64,
+    #[serde(default)]
+    pub touch_y: f64,
+    /// Whether a position has ever been saved. Zero is a legitimate
+    /// coordinate, so it cannot stand in for "never placed".
+    #[serde(default)]
+    pub touch_placed: bool,
+    /// Diameter in logical pixels. Thumb-sized by default.
+    #[serde(default = "default_touch_size")]
+    pub touch_size: f64,
     /// Expose a local HTTP endpoint so external hardware can drive the app.
     ///
     /// Off by default. It opens a listening socket -- loopback only and
@@ -110,6 +129,12 @@ fn default_note_silence() -> i64 {
     2
 }
 
+/// 88 logical pixels. Comfortably past the ~44 that guidance calls the
+/// minimum touch target, without being a landmark on the screen.
+fn default_touch_size() -> f64 {
+    88.0
+}
+
 fn default_control_port() -> i64 {
     8787
 }
@@ -152,6 +177,11 @@ impl Default for Settings {
             prebuffer_enabled: false,
             prebuffer_seconds: default_prebuffer_seconds(),
             notes_model: default_notes_model(),
+            touch_button: false,
+            touch_x: 0.0,
+            touch_y: 0.0,
+            touch_placed: false,
+            touch_size: default_touch_size(),
             control_enabled: false,
             control_port: default_control_port(),
             keep_dictation_audio: false,

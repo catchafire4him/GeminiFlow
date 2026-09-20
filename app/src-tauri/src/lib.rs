@@ -12,6 +12,7 @@ mod secrets;
 mod sound;
 mod settings;
 mod startup;
+mod touch;
 mod store;
 
 use std::sync::mpsc::channel;
@@ -102,6 +103,13 @@ pub fn run() {
             commands::note_audio,
             commands::read_log,
             commands::test_sound,
+            commands::touch_press,
+            commands::touch_release,
+            commands::touch_cancel,
+            commands::touch_move,
+            commands::touch_dragging,
+            commands::touch_settle,
+            commands::touch_dismiss,
             commands::mic_level,
             commands::set_mic_level,
             commands::set_mic_muted,
@@ -124,6 +132,22 @@ pub fn run() {
             }
 
             overlay::setup(app.handle());
+
+            // After the overlay, since it borrows that module's window
+            // styling. The saved position is only a hint -- it is clamped
+            // to whatever screen actually exists now.
+            {
+                let s = state.settings.lock();
+                let (on, size, saved) = match s {
+                    Ok(s) => (
+                        s.touch_button,
+                        s.touch_size,
+                        if s.touch_placed { Some((s.touch_x, s.touch_y)) } else { None },
+                    ),
+                    Err(_) => (false, 88.0, None),
+                };
+                touch::setup(app.handle(), on, size, saved);
+            }
 
             // The keyboard hook needs its own thread with a message pump, and
             // the engine needs a thread that is free to block on the network.
@@ -168,8 +192,12 @@ pub fn run() {
 
 fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open GeminiFlow", true, None::<&str>)?;
+    // The way back after dragging the button onto the dismiss target.
+    // Without this it could be put away and never retrieved except by
+    // hunting through Settings.
+    let touch = MenuItem::with_id(app, "touch", "Show touch button", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &touch, &quit])?;
 
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().unwrap().clone())
@@ -178,12 +206,37 @@ fn build_tray(app: &tauri::AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
+            "touch" => reveal_touch_button(app),
             "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
 
     Ok(())
+}
+
+/// Brings the floating button back and remembers that it is wanted.
+fn reveal_touch_button(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let Some(state) = app.try_state::<Arc<AppState>>() else { return };
+
+    let (size, saved) = match state.settings.lock() {
+        Ok(mut s) => {
+            s.touch_button = true;
+            let _ = s.save(&state.store);
+            (
+                s.touch_size,
+                if s.touch_placed { Some((s.touch_x, s.touch_y)) } else { None },
+            )
+        }
+        Err(_) => (88.0, None),
+    };
+
+    // Re-placed as well as shown. If it was dismissed off the edge of a
+    // screen that no longer exists, simply showing it again would put it
+    // somewhere unreachable.
+    touch::place(app, saved, size);
+    touch::show(app);
 }
 
 fn show_main_window(app: &tauri::AppHandle) {

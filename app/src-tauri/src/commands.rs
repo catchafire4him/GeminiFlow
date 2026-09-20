@@ -26,6 +26,7 @@ pub fn get_settings(state: State<'_, Arc<AppState>>) -> Settings {
 
 #[tauri::command]
 pub fn save_settings(
+    app: tauri::AppHandle,
     settings: Settings,
     state: State<'_, Arc<AppState>>,
 ) -> CmdResult<()> {
@@ -39,6 +40,20 @@ pub fn save_settings(
     crate::logging::set_debug(settings.debug_logging);
     crate::sound::set_enabled(settings.sounds_enabled);
     crate::sound::set_volume(settings.sound_volume);
+
+    // Applied now rather than on restart. A toggle that does nothing
+    // visible until you quit the app reads as broken.
+    if settings.touch_button {
+        let saved = if settings.touch_placed {
+            Some((settings.touch_x, settings.touch_y))
+        } else {
+            None
+        };
+        crate::touch::place(&app, saved, settings.touch_size);
+        crate::touch::show(&app);
+    } else {
+        crate::touch::hide(&app);
+    }
 
     if let Err(e) = crate::startup::set_enabled(settings.launch_at_login) {
         return Err(e.to_string());
@@ -485,6 +500,76 @@ pub fn set_mic_muted(muted: bool, state: State<Arc<AppState>>) -> CmdResult<()> 
 #[tauri::command]
 pub fn test_sound() {
     crate::sound::play(crate::sound::Tone::Start);
+}
+
+/// The floating button's press, release and abandon.
+///
+/// These feed the same event channel the keyboard hook does, so a
+/// dictation started by touch is the same session as one started with the
+/// shortcut -- there is no second path to keep in step.
+#[tauri::command]
+pub fn touch_press() {
+    crate::hotkey::request_press();
+}
+
+#[tauri::command]
+pub fn touch_release() {
+    crate::hotkey::request_release();
+}
+
+#[tauri::command]
+pub fn touch_cancel() {
+    crate::hotkey::request_cancel();
+}
+
+/// Moves the button, and reports whether it is now over the dismiss
+/// target so the button can show what dropping would do.
+#[tauri::command]
+pub fn touch_move(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<crate::engine::AppState>>,
+    x: f64,
+    y: f64,
+) -> bool {
+    crate::touch::move_to(&app, x, y);
+    let size = state.settings.lock().map(|s| s.touch_size).unwrap_or(88.0);
+    crate::touch::over_target(&app, size)
+}
+
+#[tauri::command]
+pub fn touch_dragging(app: tauri::AppHandle, dragging: bool) {
+    crate::touch::show_target(&app, dragging);
+}
+
+/// Remembers where the button was dropped.
+#[tauri::command]
+pub fn touch_settle(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<crate::engine::AppState>>,
+) -> CmdResult<()> {
+    crate::touch::show_target(&app, false);
+    let Some((x, y)) = crate::touch::position(&app) else {
+        return Ok(());
+    };
+    let mut settings = state.settings.lock().map_err(|_| "settings are locked")?;
+    settings.touch_x = x;
+    settings.touch_y = y;
+    settings.touch_placed = true;
+    settings.save(&state.store).map_err(fail)
+}
+
+/// Hides the button and remembers that it is hidden, so it stays hidden
+/// across restarts rather than reappearing unbidden.
+#[tauri::command]
+pub fn touch_dismiss(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, std::sync::Arc<crate::engine::AppState>>,
+) -> CmdResult<()> {
+    crate::touch::hide(&app);
+    crate::logln!("[touch] dismissed");
+    let mut settings = state.settings.lock().map_err(|_| "settings are locked")?;
+    settings.touch_button = false;
+    settings.save(&state.store).map_err(fail)
 }
 
 #[tauri::command]

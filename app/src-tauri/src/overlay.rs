@@ -47,7 +47,7 @@ pub fn setup(app: &AppHandle) {
 
 /// Adds WS_EX_NOACTIVATE (never take focus when shown) and WS_EX_TOOLWINDOW
 /// (stay out of Alt+Tab).
-fn make_non_activating(hwnd: HWND) {
+pub fn make_non_activating(hwnd: HWND) {
     unsafe {
         let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         let wanted =
