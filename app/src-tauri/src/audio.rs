@@ -538,16 +538,62 @@ pub fn to_wav(samples: &[f32]) -> Result<Vec<u8>> {
 /// it. Only genuinely quiet material is touched, and the ceiling on the gain
 /// stops near-silent noise being amplified into something the model tries to
 /// interpret as speech.
+/// How loud the recording actually is, ignoring rare transients.
+///
+/// The 99.9th percentile of sample magnitude rather than the maximum. A
+/// single cough, a knock against the desk, or a handset brushing a cheek
+/// sets the maximum for the whole recording, and judging loudness by it
+/// means one accidental noise speaks for eight minutes of speech.
+///
+/// Measured on two calls of similar length: by maximum they looked alike,
+/// 0.43 against 0.73. By this measure they were 0.10 against 0.38 -- the
+/// quieter one nearly four times fainter, and it transcribed to 630
+/// characters where the other gave 3919.
+///
+/// Counted into buckets rather than sorted: this runs over several
+/// minutes of audio and wants to stay cheap.
+pub fn speech_level(samples: &[f32]) -> f32 {
+    const BUCKETS: usize = 1000;
+    if samples.is_empty() {
+        return 0.0;
+    }
+
+    let mut counts = [0u32; BUCKETS + 1];
+    for s in samples {
+        let bucket = ((s.abs() * BUCKETS as f32).round() as usize).min(BUCKETS);
+        counts[bucket] += 1;
+    }
+
+    let wanted = (samples.len() as f64 * 0.999) as u64;
+    let mut seen = 0u64;
+    for (bucket, count) in counts.iter().enumerate() {
+        seen += *count as u64;
+        if seen >= wanted {
+            return bucket as f32 / BUCKETS as f32;
+        }
+    }
+    1.0
+}
+
+/// Brings a quiet recording up to a level the transcriber can work with.
+///
+/// Returns the gain applied, or None when the recording needs none.
 pub fn normalize(samples: &mut [f32]) -> Option<f32> {
-    const TARGET: f32 = 0.65;
+    /// Where a well-recorded voice sits by the measure above.
+    const TARGET: f32 = 0.45;
+    /// Loud enough already. The good call above measured 0.38.
+    const ENOUGH: f32 = 0.30;
+    /// Below this there is nothing to rescue, and multiplying would only
+    /// raise the noise floor.
+    const FLOOR: f32 = 0.002;
     const MAX_GAIN: f32 = 8.0;
 
-    let peak = peak(samples);
-    if peak < 0.004 || peak >= 0.35 {
+    let level = speech_level(samples);
+    if level < FLOOR || level >= ENOUGH {
         return None;
     }
 
-    let gain = (TARGET / peak).min(MAX_GAIN);
+    let gain = (TARGET / level).min(MAX_GAIN);
     for s in samples.iter_mut() {
         *s = (*s * gain).clamp(-1.0, 1.0);
     }
@@ -557,4 +603,48 @@ pub fn normalize(samples: &mut [f32]) -> Option<f32> {
 /// Distinguishes "the model heard nothing" from "the mic was muted".
 pub fn peak(samples: &[f32]) -> f32 {
     samples.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Eight minutes of quiet speech with one knock in it. The knock used to
+    /// decide the whole recording was loud enough and no gain was applied,
+    /// which is what left a real call transcribed to a tenth of its length.
+    fn quiet_with_one_knock() -> Vec<f32> {
+        let mut samples = vec![0.02f32; 16_000 * 480];
+        samples[123_456] = 0.43;
+        samples
+    }
+
+    #[test]
+    fn one_transient_does_not_speak_for_the_recording() {
+        let samples = quiet_with_one_knock();
+        assert!(peak(&samples) > 0.4, "the knock is still the loudest sample");
+        assert!(
+            speech_level(&samples) < 0.05,
+            "the level should describe the speech, not the knock"
+        );
+    }
+
+    #[test]
+    fn a_quiet_recording_is_brought_up() {
+        let mut samples = quiet_with_one_knock();
+        let gain = normalize(&mut samples).expect("quiet audio should be raised");
+        assert!(gain > 3.0, "expected a real boost, got {gain}");
+    }
+
+    #[test]
+    fn a_healthy_recording_is_left_alone() {
+        // Around where the call that transcribed well measured.
+        let mut samples = vec![0.38f32; 16_000 * 10];
+        assert!(normalize(&mut samples).is_none());
+    }
+
+    #[test]
+    fn silence_is_not_amplified() {
+        let mut samples = vec![0.0001f32; 16_000 * 10];
+        assert!(normalize(&mut samples).is_none());
+    }
 }

@@ -726,8 +726,15 @@ fn process_note(
 ) -> Result<()> {
     let NoteJob { session, mut samples } = job;
 
-    if let Some(gain) = audio::normalize(&mut samples) {
-        crate::logln!("[engine] quiet recording, applied {gain:.1}x gain");
+    // Logged either way. A recording that came back nearly empty is the
+    // moment you want to know how loud it actually was, and "no line"
+    // used to be the only evidence that gain had declined to help.
+    let level = audio::speech_level(&samples);
+    match audio::normalize(&mut samples) {
+        Some(gain) => crate::logln!(
+            "[engine] speech level {level:.3}, applied {gain:.1}x gain"
+        ),
+        None => crate::logln!("[engine] speech level {level:.3}, no gain needed"),
     }
 
     let wav = audio::to_wav(&samples)?;
